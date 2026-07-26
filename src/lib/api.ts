@@ -1,7 +1,7 @@
 // API 请求客户端
 
 import type {
-  User, Project, Task, Comment, Subtask, AuthResponse,
+  User, Project, Task, Comment, Subtask, AuthResponse, Notification,
   StatsOverview, BurndownData, WorkloadItem,
 } from '../../shared/types'
 
@@ -116,4 +116,12 @@ export const api = {
   listUsers: () => request<{ users: (User & { taskCount: number; activeCount: number })[] }>('/api/team'),
   updateRole: (userId: string, role: string) =>
     request<{ user: User }>(`/api/team/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+
+  // notifications
+  listNotifications: () =>
+    request<{ notifications: Notification[]; unread: number }>('/api/notifications'),
+  markNotificationRead: (id: string) =>
+    request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' }),
+  markAllRead: () =>
+    request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
 }

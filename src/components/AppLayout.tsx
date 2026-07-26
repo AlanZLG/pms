@@ -1,6 +1,6 @@
 // 应用主布局:侧边栏 + 顶栏
 
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard,
@@ -15,7 +15,9 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/app'
+import { useNotificationStore } from '@/stores/notifications'
 import { Avatar } from '@/components/ui'
+import NotificationDropdown from '@/components/NotificationDropdown'
 
 const navItems = [
   { to: '/', label: '仪表板', icon: LayoutDashboard, end: true },
@@ -29,7 +31,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false)
   const user = useAppStore((s) => s.user)
   const logout = useAppStore((s) => s.logout)
-  const navigate = useNavigate()
+  const nav = useNavigate()
+  const fetchNotif = useNotificationStore((s) => s.fetch)
+  const resetNotif = useNotificationStore((s) => s.reset)
+
+  useEffect(() => {
+    if (user) fetchNotif()
+    else resetNotif()
+  }, [user, fetchNotif, resetNotif])
 
   return (
     <div className="app-bg flex h-full min-h-0">
@@ -71,6 +80,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </button>
 
           <div className="ml-auto flex items-center gap-3">
+            <NotificationDropdown />
             <div className="hidden items-center gap-1.5 rounded-full border border-brand/30 bg-brand/5 px-3 py-1 text-xs text-brand-soft sm:flex">
               <Sparkles className="h-3.5 w-3.5" />
               Atlas PM
@@ -85,7 +95,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 <button
                   onClick={() => {
                     logout()
-                    navigate('/login')
+                    nav('/login')
                   }}
                   className="ml-1 rounded-lg p-2 text-muted hover:bg-bg-soft hover:text-danger"
                   title="退出登录"

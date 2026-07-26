@@ -3,7 +3,7 @@
 import db from '../db.ts'
 import { genId, parseLabels } from '../lib/utils.ts'
 import type {
-  User, Project, ProjectMember, Task, Comment, Subtask, TaskStatus,
+  User, Project, ProjectMember, Task, Comment, Subtask, Notification, TaskStatus,
   ProjectStatus, TaskPriority, MemberRole,
 } from '../../shared/types.ts'
 
@@ -292,11 +292,58 @@ export const subtaskRepo = {
   },
 }
 
+// ===== Notifications =====
+export const notificationRepo = {
+  findByUser(userId: string, limit = 50): Notification[] {
+    const rows = db.prepare(
+      'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+    ).all(userId, limit) as any[]
+    return rows.map(rowToNotification)
+  },
+  unreadCount(userId: string): number {
+    const r = db.prepare(
+      'SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0',
+    ).get(userId) as { c: number }
+    return r.c
+  },
+  create(data: {
+    userId: string
+    type: 'assign' | 'status' | 'comment' | 'system'
+    title: string
+    body: string
+    taskId?: string | null
+    projectId?: string | null
+  }): Notification {
+    const id = genId()
+    db.prepare(
+      'INSERT INTO notifications (id, user_id, type, title, body, task_id, project_id, read, created_at) VALUES (?,?,?,?,?,?,?,0,?)',
+    ).run(
+      id, data.userId, data.type, data.title, data.body,
+      data.taskId || null, data.projectId || null, new Date().toISOString(),
+    )
+    return this.findByUser(data.userId).find((n) => n.id === id)!
+  },
+  markRead(id: string): void {
+    db.prepare('UPDATE notifications SET read = 1 WHERE id = ?').run(id)
+  },
+  markAllRead(userId: string): void {
+    db.prepare('UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0').run(userId)
+  },
+}
+
 // ===== 行映射 =====
 function rowToSubtask(r: any): Subtask {
   return {
     id: r.id, taskId: r.task_id, title: r.title,
     done: !!r.done, createdAt: r.created_at,
+  }
+}
+function rowToNotification(r: any): Notification {
+  return {
+    id: r.id, userId: r.user_id, type: r.type,
+    title: r.title, body: r.body || '',
+    taskId: r.task_id, projectId: r.project_id,
+    read: !!r.read, createdAt: r.created_at,
   }
 }
 function rowToUser(r: any): User {

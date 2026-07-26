@@ -6,7 +6,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
-import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo } from '../repository/repo.ts'
+import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import type { TaskStatus, TaskPriority } from '../../shared/types.ts'
@@ -69,6 +69,19 @@ router.post('/projects/:projectId/tasks', (req: AuthRequest, res: Response, next
     if (req.userId) {
       try { commentRepo.create(task.id, req.userId, '— 创建了任务 —') } catch {}
     }
+    // 指派通知
+    if (task.assigneeId && task.assigneeId !== req.userId) {
+      try {
+        notificationRepo.create({
+          userId: task.assigneeId,
+          type: 'assign',
+          title: `你被指派到任务`,
+          body: `「${task.title}」`,
+          taskId: task.id,
+          projectId: project.id,
+        })
+      } catch {}
+    }
     res.status(201).json({ task })
   } catch (e) { next(e) }
 })
@@ -91,9 +104,39 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
     if (!task) throw new ApiError(404, '任务不存在')
     const parsed = updateSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const prevAssignee = task.assigneeId
     taskRepo.update(task.id, parsed.data as any)
     projectRepo.updateProgress(task.projectId)
-    res.json({ task: taskRepo.findById(task.id)! })
+    const updated = taskRepo.findById(task.id)!
+    // 负责人变更通知
+    if (parsed.data.assigneeId !== undefined && parsed.data.assigneeId !== prevAssignee) {
+      const newAssignee = parsed.data.assigneeId as string | null
+      if (newAssignee && newAssignee !== req.userId) {
+        try {
+          notificationRepo.create({
+            userId: newAssignee,
+            type: 'assign',
+            title: '你被指派到任务',
+            body: `「${updated.title}」`,
+            taskId: updated.id,
+            projectId: updated.projectId,
+          })
+        } catch {}
+      }
+      if (prevAssignee && prevAssignee !== req.userId && prevAssignee !== newAssignee) {
+        try {
+          notificationRepo.create({
+            userId: prevAssignee,
+            type: 'assign',
+            title: '你已被解除指派',
+            body: `任务「${updated.title}」不再分配给你`,
+            taskId: updated.id,
+            projectId: updated.projectId,
+          })
+        } catch {}
+      }
+    }
+    res.json({ task: updated })
   } catch (e) { next(e) }
 })
 
@@ -114,6 +157,19 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
       try {
         commentRepo.create(task.id, req.userId, `— 将状态从「${label[from] || from}」改为「${label[parsed.data.status]}」 —`)
       } catch {}
+      // 通知负责人(若不是操作者本人)
+      if (task.assigneeId && task.assigneeId !== req.userId) {
+        try {
+          notificationRepo.create({
+            userId: task.assigneeId,
+            type: 'status',
+            title: `任务状态变更为「${label[parsed.data.status]}」`,
+            body: `「${task.title}」`,
+            taskId: task.id,
+            projectId: task.projectId,
+          })
+        } catch {}
+      }
     }
     res.json({ task: taskRepo.findById(task.id)! })
   } catch (e) { next(e) }
@@ -143,6 +199,19 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     const comment = commentRepo.create(task.id, req.userId!, parsed.data.content)
+    // 通知负责人(若不是本人)
+    if (task.assigneeId && task.assigneeId !== req.userId) {
+      try {
+        notificationRepo.create({
+          userId: task.assigneeId,
+          type: 'comment',
+          title: '有人评论了你负责的任务',
+          body: parsed.data.content.slice(0, 60),
+          taskId: task.id,
+          projectId: task.projectId,
+        })
+      } catch {}
+    }
     res.status(201).json({ comment })
   } catch (e) { next(e) }
 })

@@ -66,6 +66,18 @@ export interface Subtask {
   createdAt: string
 }
 
+export interface Notification {
+  id: string
+  userId: string
+  type: 'assign' | 'status' | 'comment' | 'system'
+  title: string
+  body: string
+  taskId: string | null
+  projectId: string | null
+  read: boolean
+  createdAt: string
+}
+
 export interface AuthResponse {
   token: string
   user: User

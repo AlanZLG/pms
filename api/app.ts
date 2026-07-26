@@ -14,6 +14,7 @@ import projectRoutes from './routes/projects.ts'
 import taskRoutes from './routes/tasks.ts'
 import statsRoutes from './routes/stats.ts'
 import teamRoutes from './routes/team.ts'
+import { router as notificationRoutes } from './routes/notifications.ts'
 
 dotenv.config()
 
@@ -41,6 +42,7 @@ app.use('/api/projects', projectRoutes)
 app.use('/api', taskRoutes)
 app.use('/api/stats', statsRoutes)
 app.use('/api/team', teamRoutes)
+app.use('/api/notifications', notificationRoutes)
 
 /**
  * 统一错误处理

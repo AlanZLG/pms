@@ -79,12 +79,26 @@ CREATE TABLE IF NOT EXISTS subtasks (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT,
+  task_id TEXT,
+  project_id TEXT,
+  read INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_members_project ON project_members(project_id);
 CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id);
 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
 `)
 
 // 种子数据:若无用户则插入演示账号
