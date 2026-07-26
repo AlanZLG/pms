@@ -57,6 +57,14 @@ export interface Comment {
   createdAt: string
 }
 
+export interface Subtask {
+  id: string
+  taskId: string
+  title: string
+  done: boolean
+  createdAt: string
+}
+
 export interface AuthResponse {
   token: string
   user: User

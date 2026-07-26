@@ -6,7 +6,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
-import { taskRepo, projectRepo, commentRepo, userRepo } from '../repository/repo.ts'
+import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import type { TaskStatus, TaskPriority } from '../../shared/types.ts'
@@ -73,13 +73,14 @@ router.post('/projects/:projectId/tasks', (req: AuthRequest, res: Response, next
   } catch (e) { next(e) }
 })
 
-// 任务详情(含评论)
+// 任务详情(含评论与子任务)
 router.get('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const task = taskRepo.findById(req.params.taskId)
     if (!task) throw new ApiError(404, '任务不存在')
     const comments = commentRepo.findByTask(task.id)
-    res.json({ task, comments })
+    const subtasks = subtaskRepo.findByTask(task.id)
+    res.json({ task, comments, subtasks })
   } catch (e) { next(e) }
 })
 
@@ -143,6 +144,45 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     const comment = commentRepo.create(task.id, req.userId!, parsed.data.content)
     res.status(201).json({ comment })
+  } catch (e) { next(e) }
+})
+
+// ===== 子任务 =====
+// 创建子任务
+router.post('/tasks/:taskId/subtasks', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const task = taskRepo.findById(req.params.taskId)
+    if (!task) throw new ApiError(404, '任务不存在')
+    const schema = z.object({ title: z.string().min(1, '子任务不能为空').max(200) })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const subtask = subtaskRepo.create(task.id, parsed.data.title)
+    if (req.userId) {
+      try { commentRepo.create(task.id, req.userId, `— 新增子任务:${parsed.data.title} —`) } catch {}
+    }
+    res.status(201).json({ subtask })
+  } catch (e) { next(e) }
+})
+
+// 更新子任务(标题/完成状态)
+router.patch('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const schema = z.object({
+      title: z.string().min(1).max(200).optional(),
+      done: z.boolean().optional(),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    subtaskRepo.update(req.params.subtaskId, parsed.data)
+    res.json({ ok: true })
+  } catch (e) { next(e) }
+})
+
+// 删除子任务
+router.delete('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    subtaskRepo.delete(req.params.subtaskId)
+    res.json({ ok: true })
   } catch (e) { next(e) }
 })
 

@@ -1,7 +1,7 @@
 // API 请求客户端
 
 import type {
-  User, Project, Task, Comment, AuthResponse,
+  User, Project, Task, Comment, Subtask, AuthResponse,
   StatsOverview, BurndownData, WorkloadItem,
 } from '../../shared/types'
 
@@ -77,7 +77,7 @@ export const api = {
   listTasks: (projectId: string) =>
     request<{ project: Project; tasks: Task[] }>(`/api/projects/${projectId}/tasks`),
   getTask: (taskId: string) =>
-    request<{ task: Task; comments: Comment[] }>(`/api/tasks/${taskId}`),
+  request<{ task: Task; comments: Comment[]; subtasks: Subtask[] }>(`/api/tasks/${taskId}`),
   createTask: (projectId: string, data: Partial<Task>) =>
     request<{ task: Task }>(`/api/projects/${projectId}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
   updateTask: (taskId: string, data: Partial<Task>) =>
@@ -91,6 +91,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ content }),
     }),
+
+  // subtasks
+  createSubtask: (taskId: string, title: string) =>
+    request<{ subtask: Subtask }>(`/api/tasks/${taskId}/subtasks`, {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  updateSubtask: (subtaskId: string, data: { title?: string; done?: boolean }) =>
+    request<{ ok: boolean }>(`/api/subtasks/${subtaskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteSubtask: (subtaskId: string) =>
+    request<{ ok: boolean }>(`/api/subtasks/${subtaskId}`, { method: 'DELETE' }),
 
   // stats
   overview: () => request<StatsOverview>('/api/stats/overview'),

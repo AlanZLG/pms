@@ -3,7 +3,7 @@
 import db from '../db.ts'
 import { genId, parseLabels } from '../lib/utils.ts'
 import type {
-  User, Project, ProjectMember, Task, Comment, TaskStatus,
+  User, Project, ProjectMember, Task, Comment, Subtask, TaskStatus,
   ProjectStatus, TaskPriority, MemberRole,
 } from '../../shared/types.ts'
 
@@ -257,7 +257,38 @@ export const commentRepo = {
   },
 }
 
+// ===== Subtasks =====
+export const subtaskRepo = {
+  findByTask(taskId: string): Subtask[] {
+    const rows = db.prepare('SELECT * FROM subtasks WHERE task_id = ? ORDER BY created_at ASC').all(taskId) as any[]
+    return rows.map(rowToSubtask)
+  },
+  create(taskId: string, title: string): Subtask {
+    const id = genId()
+    db.prepare('INSERT INTO subtasks (id, task_id, title, done, created_at) VALUES (?,?,?,?,?)')
+      .run(id, taskId, title, 0, new Date().toISOString())
+    return this.findByTask(taskId).find((s) => s.id === id)!
+  },
+  update(id: string, data: { title?: string; done?: boolean }): void {
+    if (data.title !== undefined) {
+      db.prepare('UPDATE subtasks SET title = ? WHERE id = ?').run(data.title, id)
+    }
+    if (data.done !== undefined) {
+      db.prepare('UPDATE subtasks SET done = ? WHERE id = ?').run(data.done ? 1 : 0, id)
+    }
+  },
+  delete(id: string): void {
+    db.prepare('DELETE FROM subtasks WHERE id = ?').run(id)
+  },
+}
+
 // ===== 行映射 =====
+function rowToSubtask(r: any): Subtask {
+  return {
+    id: r.id, taskId: r.task_id, title: r.title,
+    done: !!r.done, createdAt: r.created_at,
+  }
+}
 function rowToUser(r: any): User {
   return {
     id: r.id, email: r.email, name: r.name, avatarColor: r.avatar_color,
