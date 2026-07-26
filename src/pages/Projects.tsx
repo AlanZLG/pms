@@ -97,14 +97,22 @@ export default function Projects() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="flex -space-x-2">
-                    {p.members.slice(0, 4).map((m) => {
-                      // 取成员信息简化为头像占位
-                      const color = ['#6366F1', '#10B981', '#F59E0B', '#8B5CF6'][Math.floor(Math.random() * 4)]
-                      return <Avatar key={m.userId} name={m.userId.slice(0, 1)} color={color} size={26} />
-                    })}
+                    {p.members.slice(0, 4).map((m) => (
+                      <Avatar
+                        key={m.userId}
+                        name={m.user?.name || '?'}
+                        color={m.user?.avatarColor || '#475569'}
+                        size={26}
+                      />
+                    ))}
                     {p.members.length > 4 && (
                       <div className="grid h-[26px] w-[26px] place-items-center rounded-full border border-bg bg-bg-soft text-[10px] text-muted">
                         +{p.members.length - 4}
+                      </div>
+                    )}
+                    {p.members.length === 0 && (
+                      <div className="grid h-[26px] w-[26px] place-items-center rounded-full border border-dashed border-bg-border text-[10px] text-muted">
+                        0
                       </div>
                     )}
                   </div>

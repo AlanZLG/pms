@@ -95,8 +95,18 @@ export const projectRepo = {
     db.prepare('UPDATE projects SET progress = ? WHERE id = ?').run(progress, id)
   },
   members(projectId: string): ProjectMember[] {
-    const rows = db.prepare('SELECT user_id, role, joined_at FROM project_members WHERE project_id = ?').all(projectId) as any[]
-    return rows.map((r) => ({ userId: r.user_id, role: r.role as MemberRole, joinedAt: r.joined_at }))
+    const rows = db.prepare(`
+      SELECT pm.user_id, pm.role, pm.joined_at,
+             u.name as user_name, u.avatar_color, u.email
+      FROM project_members pm JOIN users u ON pm.user_id = u.id
+      WHERE pm.project_id = ? ORDER BY pm.joined_at ASC
+    `).all(projectId) as any[]
+    return rows.map((r) => ({
+      userId: r.user_id,
+      role: r.role as MemberRole,
+      joinedAt: r.joined_at,
+      user: { name: r.user_name, avatarColor: r.avatar_color, email: r.email },
+    }))
   },
   addMember(projectId: string, userId: string, role: MemberRole): void {
     db.prepare('INSERT OR IGNORE INTO project_members (id, project_id, user_id, role, joined_at) VALUES (?,?,?,?,?)')

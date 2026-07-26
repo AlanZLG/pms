@@ -31,6 +31,7 @@ export interface ProjectMember {
   userId: string
   role: MemberRole
   joinedAt: string
+  user?: { name: string; avatarColor: string; email: string }
 }
 
 export interface Task {
