@@ -11,7 +11,18 @@ import {
   useDroppable,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import { Plus, ArrowLeft, LayoutGrid, List, Pencil, Trash2 } from 'lucide-react'
+import {
+  Plus,
+  ArrowLeft,
+  LayoutGrid,
+  List,
+  Pencil,
+  Trash2,
+  CheckSquare,
+  X,
+  Square,
+  Download,
+} from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import {
@@ -19,7 +30,6 @@ import {
   Input,
   Skeleton,
   EmptyState,
-  Avatar,
   PriorityBadge,
   StatusBadge,
   LabelTag,
@@ -29,7 +39,7 @@ import TaskDialog from '@/components/TaskDialog'
 import TaskDrawer from '@/components/TaskDrawer'
 import { useAppStore } from '@/stores/app'
 import { fmtDate, dueLabel } from '@/lib/date'
-import type { Project, Task, TaskStatus } from '../../shared/types'
+import type { Project, Task, TaskStatus, User } from '../../shared/types'
 
 const columns: { status: TaskStatus; label: string; accent: string }[] = [
   { status: 'todo', label: '待办', accent: 'text-slate-300' },
@@ -41,6 +51,7 @@ const columns: { status: TaskStatus; label: string; accent: string }[] = [
 export default function ProjectDetail() {
   const { projectId = '' } = useParams()
   const data = useAsync(() => api.listTasks(projectId), [projectId])
+  const users = useAsync(() => api.listUsers(), [])
   const notify = useAppStore((s) => s.notify)
 
   const [view, setView] = useState<'list' | 'kanban'>('kanban')
@@ -52,8 +63,18 @@ export default function ProjectDetail() {
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null)
 
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchBusy, setBatchBusy] = useState(false)
+
   const project: Project | undefined = data.data?.project
   const tasks: Task[] = data.data?.tasks || []
+  const allUsers: User[] = users.data?.users || []
+
+  const projectMembers = project?.members.map((m) => ({
+    id: m.userId,
+    name: m.user?.name || '未知',
+  })) || allUsers.map((u) => ({ id: u.id, name: u.name }))
 
   const filtered = useMemo(() => {
     return tasks.filter((t) => {
@@ -112,6 +133,86 @@ export default function ProjectDetail() {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function selectAll() {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(filtered.map((t) => t.id)))
+    }
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  async function batchUpdateStatus(status: TaskStatus) {
+    if (selectedIds.size === 0) return
+    setBatchBusy(true)
+    try {
+      let ok = 0
+      for (const id of selectedIds) {
+        await api.updateTaskStatus(id, status)
+        ok++
+      }
+      notify('success', `已更新 ${ok} 个任务状态`)
+      setSelectedIds(new Set())
+      data.reload()
+    } catch (err: any) {
+      notify('error', err?.message || '批量更新失败')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  async function batchUpdateAssignee(assigneeId: string | null) {
+    if (selectedIds.size === 0) return
+    setBatchBusy(true)
+    try {
+      let ok = 0
+      for (const id of selectedIds) {
+        await api.updateTask(id, { assigneeId })
+        ok++
+      }
+      notify('success', `已更新 ${ok} 个任务负责人`)
+      setSelectedIds(new Set())
+      data.reload()
+    } catch (err: any) {
+      notify('error', err?.message || '批量更新失败')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  async function batchDelete() {
+    if (selectedIds.size === 0) return
+    if (!confirm(`确认删除选中的 ${selectedIds.size} 个任务?`)) return
+    setBatchBusy(true)
+    try {
+      let ok = 0
+      for (const id of selectedIds) {
+        await api.deleteTask(id)
+        ok++
+      }
+      notify('success', `已删除 ${ok} 个任务`)
+      setSelectedIds(new Set())
+      data.reload()
+    } catch (err: any) {
+      notify('error', err?.message || '批量删除失败')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
   async function saveProject(d: Partial<Project>) {
     if (!project) return
     await api.updateProject(project.id, d)
@@ -163,6 +264,9 @@ export default function ProjectDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => api.exportTasksCsv(project.id)}>
+            <Download className="h-3.5 w-3.5" /> 导出任务
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => setProjectDialogOpen(true)}>
             <Pencil className="h-3.5 w-3.5" /> 编辑项目
           </Button>
@@ -179,9 +283,20 @@ export default function ProjectDetail() {
             placeholder="搜索任务"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
+            disabled={selectMode}
           />
         </div>
         <div className="flex items-center gap-2">
+          {view === 'list' && !selectMode && (
+            <Button variant="ghost" size="sm" onClick={() => setSelectMode(true)}>
+              <CheckSquare className="h-3.5 w-3.5" /> 批量操作
+            </Button>
+          )}
+          {view === 'list' && selectMode && (
+            <Button variant="ghost" size="sm" onClick={exitSelectMode}>
+              <X className="h-3.5 w-3.5" /> 退出
+            </Button>
+          )}
           {view === 'list' && (
             <div className="flex gap-1 rounded-lg bg-bg-soft p-1">
               {(['all', 'todo', 'in_progress', 'review', 'done'] as const).map((s) => (
@@ -225,6 +340,47 @@ export default function ProjectDetail() {
         </div>
       </div>
 
+      {/* 批量操作工具栏 */}
+      {view === 'list' && selectMode && selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-brand/30 bg-brand/5 px-4 py-3">
+          <span className="text-sm font-medium text-brand-soft">
+            已选中 {selectedIds.size} 项 / 共 {filtered.length} 项
+          </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              disabled={batchBusy}
+              onChange={(e) => {
+                if (e.target.value) batchUpdateStatus(e.target.value as TaskStatus)
+              }}
+              className="rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-brand"
+              defaultValue=""
+            >
+              <option value="" disabled>更新状态</option>
+              {columns.map((c) => (
+                <option key={c.status} value={c.status}>{c.label}</option>
+              ))}
+            </select>
+            <select
+              disabled={batchBusy}
+              onChange={(e) => {
+                batchUpdateAssignee(e.target.value || null)
+              }}
+              className="rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-sm text-slate-100 outline-none focus:border-brand"
+              defaultValue=""
+            >
+              <option value="" disabled>更新负责人</option>
+              <option value="">未指派</option>
+              {projectMembers.map((m) => (
+                <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </select>
+            <Button variant="danger" size="sm" onClick={batchDelete} disabled={batchBusy}>
+              <Trash2 className="h-3.5 w-3.5" /> 批量删除
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* 内容 */}
       {view === 'list' ? (
         filtered.length === 0 ? (
@@ -234,6 +390,23 @@ export default function ProjectDetail() {
             <table className="w-full text-sm">
               <thead className="bg-bg-soft text-xs text-muted">
                 <tr>
+                  {selectMode && (
+                    <th className="w-10 px-3 py-3">
+                      <button
+                        onClick={selectAll}
+                        className="grid h-5 w-5 place-items-center rounded border border-bg-border bg-bg-soft transition hover:border-brand"
+                        title={selectedIds.size === filtered.length ? '取消全选' : '全选'}
+                      >
+                        {selectedIds.size === filtered.length && filtered.length > 0 ? (
+                          <CheckSquare className="h-3.5 w-3.5 text-brand" />
+                        ) : selectedIds.size > 0 ? (
+                          <Square className="h-3.5 w-3.5 text-brand" />
+                        ) : (
+                          <Square className="h-3.5 w-3.5 text-muted" />
+                        )}
+                      </button>
+                    </th>
+                  )}
                   <th className="px-4 py-3 text-left font-medium">任务</th>
                   <th className="px-4 py-3 text-left font-medium">状态</th>
                   <th className="px-4 py-3 text-left font-medium">优先级</th>
@@ -244,12 +417,35 @@ export default function ProjectDetail() {
               <tbody className="divide-y divide-bg-border">
                 {filtered.map((t) => {
                   const dl = dueLabel(t.dueDate)
+                  const isSelected = selectedIds.has(t.id)
                   return (
                     <tr
                       key={t.id}
-                      className="cursor-pointer transition hover:bg-bg-soft/60"
-                      onClick={() => setDrawerTaskId(t.id)}
+                      className={
+                        'transition hover:bg-bg-soft/60 ' +
+                        (selectMode ? 'cursor-pointer ' : 'cursor-pointer ') +
+                        (isSelected ? 'bg-brand/10' : '')
+                      }
+                      onClick={() => {
+                        if (selectMode) toggleSelect(t.id)
+                        else setDrawerTaskId(t.id)
+                      }}
                     >
+                      {selectMode && (
+                        <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => toggleSelect(t.id)}
+                            className={
+                              'grid h-5 w-5 place-items-center rounded border transition ' +
+                              (isSelected
+                                ? 'border-brand bg-brand text-white'
+                                : 'border-bg-border hover:border-brand')
+                            }
+                          >
+                            {isSelected && <CheckSquare className="h-3.5 w-3.5" />}
+                          </button>
+                        </td>
+                      )}
                       <td className="px-4 py-3">
                         <div className="font-medium text-slate-100">{t.title}</div>
                         {t.labels.length > 0 && (
@@ -280,20 +476,24 @@ export default function ProjectDetail() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          className="mr-2 text-muted hover:text-brand-soft"
-                          onClick={() => openEdit(t)}
-                          title="编辑"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          className="text-muted hover:text-danger"
-                          onClick={() => deleteTask(t)}
-                          title="删除"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {!selectMode && (
+                          <>
+                            <button
+                              className="mr-2 text-muted hover:text-brand-soft"
+                              onClick={() => openEdit(t)}
+                              title="编辑"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button
+                              className="text-muted hover:text-danger"
+                              onClick={() => deleteTask(t)}
+                              title="删除"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   )

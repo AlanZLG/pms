@@ -13,6 +13,7 @@ import Projects from '@/pages/Projects'
 import ProjectDetail from '@/pages/ProjectDetail'
 import Stats from '@/pages/Stats'
 import Team from '@/pages/Team'
+import Notifications from '@/pages/Notifications'
 import Settings from '@/pages/Settings'
 
 export default function App() {
@@ -49,6 +50,7 @@ export default function App() {
                   <Route path="/projects/:projectId" element={<ProjectDetail />} />
                   <Route path="/stats" element={<Stats />} />
                   <Route path="/team" element={<Team />} />
+                  <Route path="/notifications" element={<Notifications />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>

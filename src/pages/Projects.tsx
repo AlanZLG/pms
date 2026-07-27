@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, FolderKanban, ArrowRight } from 'lucide-react'
+import { Plus, Search, FolderKanban, ArrowRight, Download } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { Card, Button, Input, Skeleton, EmptyState, Avatar } from '@/components/ui'
@@ -33,9 +33,14 @@ export default function Projects() {
           <h2 className="font-display text-2xl text-white">项目</h2>
           <p className="mt-1 text-sm text-muted">管理你的全部项目与协作进度</p>
         </div>
-        <Button onClick={() => setOpen(true)}>
-          <Plus className="h-4 w-4" /> 新建项目
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => api.exportProjectsCsv()}>
+            <Download className="h-4 w-4" /> 导出 CSV
+          </Button>
+          <Button onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" /> 新建项目
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

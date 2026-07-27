@@ -15,6 +15,7 @@ const createSchema = z.object({
   description: z.string().max(500).optional().default(''),
   status: z.enum(['planning', 'active', 'completed', 'archived']).optional().default('planning'),
   dueDate: z.string().nullable().optional().default(null),
+  ownerId: z.string().optional(),
 })
 
 const updateSchema = z.object({
@@ -52,13 +53,28 @@ router.post('/', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const parsed = createSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const user = userRepo.findById(req.userId!)
+    if (!user) throw new ApiError(404, '用户不存在')
+    // 非管理员不能指定其他人作为负责人
+    let ownerId = req.userId!
+    if (parsed.data.ownerId && parsed.data.ownerId !== req.userId) {
+      if (user.role !== 'admin') {
+        throw new ApiError(403, '无权指定他人为负责人')
+      }
+      if (!userRepo.findById(parsed.data.ownerId)) {
+        throw new ApiError(400, '指定的负责人不存在')
+      }
+      ownerId = parsed.data.ownerId
+    }
     const project = projectRepo.create({
       name: parsed.data.name,
       description: parsed.data.description,
       status: parsed.data.status as ProjectStatus,
-      ownerId: req.userId!,
+      ownerId,
       dueDate: parsed.data.dueDate,
     })
+    // 自动添加负责人为成员
+    projectRepo.addMember(project.id, ownerId, 'owner')
     res.status(201).json({ project })
   } catch (e) { next(e) }
 })

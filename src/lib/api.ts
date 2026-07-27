@@ -2,7 +2,7 @@
 
 import type {
   User, Project, Task, Comment, Subtask, AuthResponse, Notification,
-  StatsOverview, BurndownData, WorkloadItem,
+  StatsOverview, BurndownData, WorkloadItem, Template, Attachment,
 } from '../../shared/types'
 
 const TOKEN_KEY = 'pm_token'
@@ -77,7 +77,7 @@ export const api = {
   listTasks: (projectId: string) =>
     request<{ project: Project; tasks: Task[] }>(`/api/projects/${projectId}/tasks`),
   getTask: (taskId: string) =>
-  request<{ task: Task; comments: Comment[]; subtasks: Subtask[] }>(`/api/tasks/${taskId}`),
+    request<{ task: Task; comments: Comment[]; subtasks: Subtask[]; attachments: Attachment[] }>(`/api/tasks/${taskId}`),
   createTask: (projectId: string, data: Partial<Task>) =>
     request<{ task: Task }>(`/api/projects/${projectId}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
   updateTask: (taskId: string, data: Partial<Task>) =>
@@ -117,11 +117,83 @@ export const api = {
   updateRole: (userId: string, role: string) =>
     request<{ user: User }>(`/api/team/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
 
+  // export
+  exportTasksCsv: (projectId: string) => {
+    const token = getToken()
+    const url = `/api/export/projects/${projectId}/tasks.csv`
+    if (token) {
+      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+        .then((res) => res.blob())
+        .then((blob) => {
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = `tasks_${projectId}.csv`
+          a.click()
+          URL.revokeObjectURL(a.href)
+        })
+    }
+  },
+  exportProjectsCsv: () => {
+    const token = getToken()
+    const url = '/api/export/projects.csv'
+    if (token) {
+      fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+        .then((res) => res.blob())
+        .then((blob) => {
+          const a = document.createElement('a')
+          a.href = URL.createObjectURL(blob)
+          a.download = 'projects.csv'
+          a.click()
+          URL.revokeObjectURL(a.href)
+        })
+    }
+  },
+
+  // attachments
+  uploadAttachment: (taskId: string, file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = getToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    return fetch(`/api/attachments/tasks/${taskId}`, {
+      method: 'POST',
+      body: formData,
+      headers,
+    }).then(async (res) => {
+      if (!res.ok) {
+        let message = `上传失败(${res.status})`
+        try {
+          const body = await res.json()
+          message = body.error || message
+        } catch {}
+        throw new Error(message)
+      }
+      return res.json() as Promise<{ attachment: Attachment }>
+    })
+  },
+  listAttachments: (taskId: string) =>
+    request<{ attachments: Attachment[] }>(`/api/attachments/tasks/${taskId}`),
+  deleteAttachment: (id: string) =>
+    request<{ ok: boolean }>(`/api/attachments/${id}`, { method: 'DELETE' }),
+  getAttachmentUrl: (id: string) => `/api/attachments/${id}`,
+
+  // templates
+  listTemplates: () => request<{ templates: Template[] }>('/api/templates'),
+  createTemplate: (data: Omit<Template, 'id' | 'createdAt'>) =>
+    request<{ template: Template }>('/api/templates', { method: 'POST', body: JSON.stringify(data) }),
+  deleteTemplate: (id: string) =>
+    request<{ ok: boolean }>(`/api/templates/${id}`, { method: 'DELETE' }),
+
   // notifications
-  listNotifications: () =>
-    request<{ notifications: Notification[]; unread: number }>('/api/notifications'),
+  listNotifications: (type?: string) =>
+    request<{ notifications: Notification[]; unread: number }>(
+      `/api/notifications${type ? `?type=${type}` : ''}`,
+    ),
   markNotificationRead: (id: string) =>
     request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: 'POST' }),
   markAllRead: () =>
     request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
+  deleteNotification: (id: string) =>
+    request<{ ok: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' }),
 }

@@ -1,6 +1,6 @@
 // 共享小型 UI 组件
 
-import { type ReactNode } from 'react'
+import React, { type ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import type { TaskPriority, TaskStatus } from '../../shared/types'
 
@@ -110,17 +110,20 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
   )
 }
 
-export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...props}
-      className={cn(
-        'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
-        props.className,
-      )}
-    />
-  )
-}
+export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  function Textarea(props, ref) {
+    return (
+      <textarea
+        {...props}
+        ref={ref}
+        className={cn(
+          'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
+          props.className,
+        )}
+      />
+    )
+  },
+)
 
 // 卡片
 export function Card({ className, children }: { className?: string; children: ReactNode }) {

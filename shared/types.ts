@@ -106,3 +106,25 @@ export interface WorkloadItem {
   done: number
   inProgress: number
 }
+
+export interface Template {
+  id: string
+  name: string
+  title: string
+  description: string
+  priority: TaskPriority
+  labels: string[]
+  createdAt: string
+}
+
+export interface Attachment {
+  id: string
+  taskId: string
+  userId: string
+  userName: string
+  filename: string
+  originalName: string
+  size: number
+  mimeType: string
+  createdAt: string
+}

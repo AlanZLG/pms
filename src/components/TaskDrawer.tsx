@@ -1,13 +1,14 @@
-// 任务详情抽屉(含评论)
+// 任务详情抽屉(含评论 + 附件)
 
-import { useEffect, useState } from 'react'
-import { X, Send, Trash2, Calendar, Flag, Tag, Check, Plus } from 'lucide-react'
+import { useEffect, useState, useRef, useCallback } from 'react'
+import { X, Send, Trash2, Calendar, Flag, Tag, Check, Plus, AtSign, Paperclip, Download, FileText, FileImage, FileCode } from 'lucide-react'
 import { api } from '@/lib/api'
 import { Avatar, Button, PriorityBadge, StatusBadge, LabelTag, Textarea, Input } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
-import { fmtDateTime, fromNow, dueLabel } from '@/lib/date'
+import { useAsync } from '@/hooks/useAsync'
+import { fromNow, dueLabel } from '@/lib/date'
 import { cn } from '@/lib/utils'
-import type { Task, Comment, Subtask } from '../../shared/types'
+import type { Task, Comment, Subtask, User, Attachment } from '../../shared/types'
 
 interface Props {
   taskId: string | null
@@ -19,13 +20,81 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
   const [task, setTask] = useState<Task | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
   const [subtasks, setSubtasks] = useState<Subtask[]>([])
+  const [attachments, setAttachments] = useState<Attachment[]>([])
   const [newSubtask, setNewSubtask] = useState('')
   const [subtaskBusy, setSubtaskBusy] = useState(false)
   const [loading, setLoading] = useState(false)
   const [comment, setComment] = useState('')
   const [posting, setPosting] = useState(false)
+  const [uploading, setUploading] = useState(false)
   const user = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const users = useAsync(() => api.listUsers(), [])
+  const allUsers: User[] = users.data?.users || []
+
+  const [mentionQuery, setMentionQuery] = useState('')
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [showMention, setShowMention] = useState(false)
+  const [mentionStart, setMentionStart] = useState(-1)
+
+  const filteredUsers = allUsers.filter(
+    (u) => u.name.toLowerCase().includes(mentionQuery.toLowerCase()) && u.id !== user?.id,
+  )
+
+  function handleCommentChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const value = e.target.value
+    setComment(value)
+    const cursorPos = e.target.selectionStart
+    const before = value.slice(0, cursorPos)
+    const atIdx = before.lastIndexOf('@')
+    if (atIdx >= 0 && (atIdx === 0 || /\s/.test(before[atIdx - 1] || ''))) {
+      const query = before.slice(atIdx + 1)
+      if (!/\s/.test(query) && query.length <= 20) {
+        setMentionQuery(query)
+        setMentionStart(atIdx)
+        setMentionIndex(0)
+        setShowMention(true)
+        return
+      }
+    }
+    setShowMention(false)
+  }
+
+  function insertMention(name: string) {
+    if (mentionStart < 0) return
+    const before = comment.slice(0, mentionStart)
+    const after = comment.slice(mentionStart + 1 + mentionQuery.length)
+    const newComment = `${before}@${name} ${after}`
+    setComment(newComment)
+    setShowMention(false)
+    if (textareaRef.current) {
+      const newPos = before.length + name.length + 3
+      textareaRef.current.focus()
+      requestAnimationFrame(() => {
+        textareaRef.current?.setSelectionRange(newPos, newPos)
+      })
+    }
+  }
+
+  function handleCommentKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (showMention && filteredUsers.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex((i) => (i + 1) % filteredUsers.length)
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex((i) => (i - 1 + filteredUsers.length) % filteredUsers.length)
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        insertMention(filteredUsers[mentionIndex].name)
+      } else if (e.key === 'Escape') {
+        setShowMention(false)
+      }
+    }
+  }
 
   useEffect(() => {
     if (!taskId) {
@@ -39,6 +108,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
         setTask(r.task)
         setComments(r.comments)
         setSubtasks(r.subtasks || [])
+        setAttachments(r.attachments || [])
       })
       .finally(() => setLoading(false))
   }, [taskId])
@@ -81,6 +151,16 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     }
   }
 
+  const refreshTaskData = useCallback(async () => {
+    if (!task) return
+    try {
+      const r = await api.getTask(task.id)
+      setComments(r.comments)
+      setSubtasks(r.subtasks || [])
+      setAttachments(r.attachments || [])
+    } catch {}
+  }, [task])
+
   async function refreshComments() {
     if (!task) return
     try {
@@ -110,6 +190,47 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     notify('success', '任务已删除')
     onChanged()
     onClose()
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    if (!task || !e.target.files?.length) return
+    setUploading(true)
+    try {
+      for (const file of Array.from(e.target.files)) {
+        const { attachment: att } = await api.uploadAttachment(task.id, file)
+        setAttachments((prev) => [att, ...prev])
+      }
+      notify('success', '附件已上传')
+    } catch (e: any) {
+      notify('error', e?.message || '上传失败')
+    } finally {
+      setUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  async function deleteAttachment(id: string) {
+    if (!confirm('确定删除该附件?')) return
+    try {
+      await api.deleteAttachment(id)
+      setAttachments((prev) => prev.filter((a) => a.id !== id))
+      notify('success', '附件已删除')
+    } catch (e: any) {
+      notify('error', e?.message || '删除失败')
+    }
+  }
+
+  function getFileIcon(mimeType: string) {
+    if (mimeType.startsWith('image/')) return <FileImage className="h-4 w-4 text-sky-300" />
+    if (mimeType.includes('pdf') || mimeType.includes('document') || mimeType.includes('sheet')) return <FileText className="h-4 w-4 text-warn" />
+    if (mimeType.includes('code') || mimeType.includes('javascript') || mimeType.includes('json')) return <FileCode className="h-4 w-4 text-brand-soft" />
+    return <FileText className="h-4 w-4 text-muted" />
+  }
+
+  function formatFileSize(bytes: number) {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   }
 
   const due = dueLabel(task?.dueDate || null)
@@ -189,6 +310,72 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                     </span>
                   </div>
                 )}
+              </div>
+
+              {/* 附件 */}
+              <div className="mt-6">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-display text-base text-slate-100">
+                    附件 ({attachments.length})
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={handleFileUpload}
+                      accept="*/*"
+                    />
+                    <Button
+                      size="sm"
+                      variant="soft"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                    >
+                      <Paperclip className="h-3.5 w-3.5" />
+                      {uploading ? '上传中…' : '上传'}
+                    </Button>
+                  </div>
+                </div>
+                <ul className="space-y-1.5">
+                  {attachments.map((a) => (
+                    <li
+                      key={a.id}
+                      className="group flex items-center gap-2 rounded-lg bg-bg-panel/50 px-3 py-2 transition hover:bg-bg-panel"
+                    >
+                      {getFileIcon(a.mimeType)}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm text-slate-200" title={a.originalName}>
+                          {a.originalName}
+                        </div>
+                        <div className="text-xs text-muted">
+                          {formatFileSize(a.size)} · {a.userName} · {fromNow(a.createdAt)}
+                        </div>
+                      </div>
+                      <a
+                        href={api.getAttachmentUrl(a.id)}
+                        download={a.originalName}
+                        className="rounded-lg p-1.5 text-muted transition hover:bg-bg-soft hover:text-brand-soft"
+                        title="下载"
+                      >
+                        <Download className="h-4 w-4" />
+                      </a>
+                      <button
+                        onClick={() => deleteAttachment(a.id)}
+                        className="rounded-lg p-1.5 text-muted opacity-0 transition hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
+                        title="删除"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                  {attachments.length === 0 && (
+                    <li className="rounded-xl border border-dashed border-bg-border px-3 py-4 text-center text-xs text-muted">
+                      还没有附件
+                    </li>
+                  )}
+                </ul>
               </div>
 
               {/* 子任务清单 */}
@@ -291,7 +478,9 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                                 : 'mt-1 whitespace-pre-wrap text-sm text-slate-200'
                             }
                           >
-                            {c.content}
+                            {isSystem
+                              ? c.content
+                              : renderCommentWithMentions(c.content)}
                           </p>
                         </div>
                       </li>
@@ -310,12 +499,42 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
             <div className="border-t border-bg-border p-4">
               <div className="mb-3 flex items-start gap-2">
                 {user && <Avatar name={user.name} color={user.avatarColor} size={32} />}
-                <Textarea
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  rows={2}
-                  placeholder="写下你的评论…"
-                />
+                <div className="relative flex-1">
+                  <Textarea
+                    ref={textareaRef}
+                    value={comment}
+                    onChange={handleCommentChange}
+                    onKeyDown={handleCommentKeyDown}
+                    rows={2}
+                    placeholder="写下你的评论… 输入 @ 提及某人"
+                  />
+                  {showMention && filteredUsers.length > 0 && (
+                    <div className="absolute bottom-full left-0 z-20 mb-2 w-56 overflow-hidden rounded-xl border border-bg-border bg-bg-soft shadow-xl">
+                      <div className="flex items-center gap-2 border-b border-bg-border px-3 py-2 text-xs text-muted">
+                        <AtSign className="h-3.5 w-3.5" />
+                        选择要提及的成员
+                      </div>
+                      <ul className="max-h-48 overflow-y-auto">
+                        {filteredUsers.map((u, i) => (
+                          <li
+                            key={u.id}
+                            onClick={() => insertMention(u.name)}
+                            className={cn(
+                              'flex cursor-pointer items-center gap-2 px-3 py-2 text-sm transition',
+                              i === mentionIndex
+                                ? 'bg-brand/15 text-brand-soft'
+                                : 'text-slate-200 hover:bg-bg',
+                            )}
+                            onMouseEnter={() => setMentionIndex(i)}
+                          >
+                            <Avatar name={u.name} color={u.avatarColor} size={24} />
+                            <span>{u.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex justify-between gap-2">
                 <Button variant="danger" size="sm" onClick={removeTask}>
@@ -331,4 +550,18 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
       </aside>
     </div>
   )
+}
+
+function renderCommentWithMentions(content: string) {
+  const parts = content.split(/(@\S+)/g)
+  return parts.map((part, i) => {
+    if (part.startsWith('@')) {
+      return (
+        <span key={i} className="font-medium text-brand-soft">
+          {part}
+        </span>
+      )
+    }
+    return part
+  })
 }

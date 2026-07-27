@@ -7,6 +7,7 @@ import {
   FolderKanban,
   BarChart3,
   Users,
+  Bell,
   Settings,
   LogOut,
   Menu,
@@ -24,6 +25,7 @@ const navItems = [
   { to: '/projects', label: '项目', icon: FolderKanban },
   { to: '/stats', label: '统计', icon: BarChart3 },
   { to: '/team', label: '团队', icon: Users },
+  { to: '/notifications', label: '通知', icon: Bell },
 ]
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -120,6 +122,8 @@ function SidebarContent({
   collapsed: boolean
   onNavigate?: () => void
 }) {
+  const unread = useNotificationStore((s) => s.unread)
+
   return (
     <>
       <div className="flex h-16 items-center gap-2.5 px-4">
@@ -134,26 +138,43 @@ function SidebarContent({
         )}
       </div>
       <nav className="mt-4 flex flex-1 flex-col gap-1 px-3">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              cn(
-                'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
-                isActive
-                  ? 'bg-brand/12 text-white shadow-glow'
-                  : 'text-slate-400 hover:bg-bg-elev hover:text-slate-100',
-                collapsed && 'justify-center',
-              )
-            }
-          >
-            <item.icon className="h-5 w-5" />
-            {!collapsed && <span>{item.label}</span>}
-          </NavLink>
-        ))}
+        {navItems.map((item) => {
+          const isNotif = item.to === '/notifications'
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                cn(
+                  'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+                  isActive
+                    ? 'bg-brand/12 text-white shadow-glow'
+                    : 'text-slate-400 hover:bg-bg-elev hover:text-slate-100',
+                  collapsed && 'justify-center',
+                )
+              }
+            >
+              <span className="relative">
+                <item.icon className="h-5 w-5" />
+                {isNotif && unread > 0 && (
+                  <span className="absolute -right-1.5 -top-1.5 grid h-4 min-w-[16px] place-items-center rounded-full bg-danger px-1 text-[9px] font-semibold text-white">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </span>
+              {!collapsed && (
+                <span className="flex-1">{item.label}</span>
+              )}
+              {!collapsed && isNotif && unread > 0 && (
+                <span className="rounded-full bg-danger/20 px-1.5 py-0.5 text-[10px] font-medium text-danger">
+                  {unread}
+                </span>
+              )}
+            </NavLink>
+          )
+        })}
       </nav>
       <div className="border-t border-bg-border p-3">
         <NavLink

@@ -7,9 +7,10 @@ interface NotificationState {
   unread: number
   loading: boolean
   fetched: boolean
-  fetch: () => Promise<void>
+  fetch: (type?: string) => Promise<void>
   markRead: (id: string) => Promise<void>
   markAllRead: () => Promise<void>
+  remove: (id: string) => Promise<void>
   reset: () => void
 }
 
@@ -19,10 +20,10 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   loading: false,
   fetched: false,
 
-  fetch: async () => {
+  fetch: async (type?: string) => {
     set({ loading: true })
     try {
-      const { notifications, unread } = await api.listNotifications()
+      const { notifications, unread } = await api.listNotifications(type)
       set({ items: notifications, unread, loading: false, fetched: true })
     } catch {
       set({ loading: false })
@@ -43,6 +44,15 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
       await api.markAllRead()
       const items = get().items.map((n) => ({ ...n, read: true }))
       set({ items, unread: 0 })
+    } catch {}
+  },
+
+  remove: async (id) => {
+    try {
+      await api.deleteNotification(id)
+      const items = get().items.filter((n) => n.id !== id)
+      const unread = items.filter((n) => !n.read).length
+      set({ items, unread })
     } catch {}
   },
 

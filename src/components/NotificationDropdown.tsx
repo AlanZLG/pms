@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bell, CheckCheck, UserPlus, Activity, MessageSquare, X, Inbox } from 'lucide-react'
+import { Bell, CheckCheck, UserPlus, Activity, MessageSquare, X, Inbox, ListChecks } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useNotificationStore } from '@/stores/notifications'
 import { cn } from '@/lib/utils'
@@ -98,7 +98,7 @@ export default function NotificationDropdown() {
               </div>
             ) : (
               <ul>
-                {items.map((n) => {
+                {items.slice(0, 8).map((n) => {
                   const Icon = iconMap[n.type]
                   return (
                     <li key={n.id}>
@@ -129,6 +129,21 @@ export default function NotificationDropdown() {
               </ul>
             )}
           </div>
+
+          {items.length > 0 && (
+            <div className="border-t border-bg-border px-4 py-2">
+              <button
+                onClick={() => {
+                  setOpen(false)
+                  nav('/notifications')
+                }}
+                className="flex w-full items-center justify-center gap-1.5 text-xs text-brand hover:text-brand-soft"
+              >
+                <ListChecks className="h-3.5 w-3.5" />
+                查看全部通知
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

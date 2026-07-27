@@ -6,9 +6,10 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
-import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo } from '../repository/repo.ts'
+import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo, attachmentRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
+import { sendMail, taskCompleteEmail } from '../lib/mail.ts'
 import type { TaskStatus, TaskPriority } from '../../shared/types.ts'
 
 const router = Router()
@@ -93,7 +94,8 @@ router.get('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunctio
     if (!task) throw new ApiError(404, '任务不存在')
     const comments = commentRepo.findByTask(task.id)
     const subtasks = subtaskRepo.findByTask(task.id)
-    res.json({ task, comments, subtasks })
+    const attachments = attachmentRepo.findByTask(task.id)
+    res.json({ task, comments, subtasks, attachments })
   } catch (e) { next(e) }
 })
 
@@ -105,6 +107,7 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
     const parsed = updateSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     const prevAssignee = task.assigneeId
+    const prevStatus = task.status
     taskRepo.update(task.id, parsed.data as any)
     projectRepo.updateProgress(task.projectId)
     const updated = taskRepo.findById(task.id)!
@@ -134,6 +137,18 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
             projectId: updated.projectId,
           })
         } catch {}
+      }
+    }
+    // 任务完成邮件通知
+    if (parsed.data.status === 'done' && prevStatus !== 'done' && task.assigneeId && task.assigneeId !== req.userId) {
+      const assignee = userRepo.findById(task.assigneeId)
+      const project = projectRepo.findById(task.projectId)
+      if (assignee && project) {
+        sendMail(
+          assignee.email,
+          `任务已完成: ${task.title}`,
+          taskCompleteEmail(task.title, project.name, assignee.name),
+        ).catch(() => {})
       }
     }
     res.json({ task: updated })
@@ -169,6 +184,18 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
             projectId: task.projectId,
           })
         } catch {}
+        // 任务完成时发送邮件通知
+        if (parsed.data.status === 'done') {
+          const assignee = userRepo.findById(task.assigneeId)
+          const project = projectRepo.findById(task.projectId)
+          if (assignee && project) {
+            sendMail(
+              assignee.email,
+              `任务已完成: ${task.title}`,
+              taskCompleteEmail(task.title, project.name, assignee.name),
+            ).catch(() => {})
+          }
+        }
       }
     }
     res.json({ task: taskRepo.findById(task.id)! })
@@ -211,6 +238,23 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
           projectId: task.projectId,
         })
       } catch {}
+    }
+    // 解析 @提及 并发送通知
+    const mentions = parseMentions(parsed.data.content)
+    for (const name of mentions) {
+      const mentioned = userRepo.findByName(name)
+      if (mentioned && mentioned.id !== req.userId) {
+        try {
+          notificationRepo.create({
+            userId: mentioned.id,
+            type: 'comment',
+            title: `你被 @ 提及了`,
+            body: parsed.data.content.slice(0, 60),
+            taskId: task.id,
+            projectId: task.projectId,
+          })
+        } catch {}
+      }
     }
     res.status(201).json({ comment })
   } catch (e) { next(e) }
@@ -256,3 +300,13 @@ router.delete('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: Ne
 })
 
 export default router
+
+function parseMentions(content: string): string[] {
+  const regex = /@(\S+)/g
+  const names = new Set<string>()
+  let match
+  while ((match = regex.exec(content)) !== null) {
+    names.add(match[1])
+  }
+  return [...names]
+}

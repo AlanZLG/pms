@@ -3,7 +3,7 @@
 import db from '../db.ts'
 import { genId, parseLabels } from '../lib/utils.ts'
 import type {
-  User, Project, ProjectMember, Task, Comment, Subtask, Notification, TaskStatus,
+  User, Project, ProjectMember, Task, Comment, Subtask, Notification, Template, Attachment, TaskStatus,
   ProjectStatus, TaskPriority, MemberRole,
 } from '../../shared/types.ts'
 
@@ -15,6 +15,10 @@ export const userRepo = {
   },
   findById(id: string): User | null {
     const row = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as any
+    return row ? rowToUser(row) : null
+  },
+  findByName(name: string): User | null {
+    const row = db.prepare('SELECT * FROM users WHERE name = ?').get(name) as any
     return row ? rowToUser(row) : null
   },
   findAll(): User[] {
@@ -294,16 +298,24 @@ export const subtaskRepo = {
 
 // ===== Notifications =====
 export const notificationRepo = {
-  findByUser(userId: string, limit = 50): Notification[] {
-    const rows = db.prepare(
-      'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
-    ).all(userId, limit) as any[]
+  findByUser(userId: string, limit = 50, type?: string): Notification[] {
+    const rows = type
+      ? db.prepare(
+          'SELECT * FROM notifications WHERE user_id = ? AND type = ? ORDER BY created_at DESC LIMIT ?',
+        ).all(userId, type, limit) as any[]
+      : db.prepare(
+          'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ?',
+        ).all(userId, limit) as any[]
     return rows.map(rowToNotification)
   },
-  unreadCount(userId: string): number {
-    const r = db.prepare(
-      'SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0',
-    ).get(userId) as { c: number }
+  unreadCount(userId: string, type?: string): number {
+    const r = type
+      ? db.prepare(
+          'SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0 AND type = ?',
+        ).get(userId, type) as { c: number }
+      : db.prepare(
+          'SELECT COUNT(*) as c FROM notifications WHERE user_id = ? AND read = 0',
+        ).get(userId) as { c: number }
     return r.c
   },
   create(data: {
@@ -328,6 +340,87 @@ export const notificationRepo = {
   },
   markAllRead(userId: string): void {
     db.prepare('UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0').run(userId)
+  },
+  delete(id: string): void {
+    db.prepare('DELETE FROM notifications WHERE id = ?').run(id)
+  },
+}
+
+// ===== Templates =====
+export const templateRepo = {
+  findAll(): Template[] {
+    const rows = db.prepare('SELECT * FROM templates ORDER BY created_at DESC').all() as any[]
+    return rows.map(rowToTemplate)
+  },
+  create(data: {
+    name: string
+    title: string
+    description: string
+    priority: string
+    labels: string[]
+  }): Template {
+    const id = genId()
+    db.prepare(
+      'INSERT INTO templates (id, name, title, description, priority, labels, created_at) VALUES (?,?,?,?,?,?,?)',
+    ).run(
+      id, data.name, data.title, data.description, data.priority,
+      data.labels.join(','), new Date().toISOString(),
+    )
+    return this.findById(id)!
+  },
+  update(id: string, data: { name?: string; title?: string; description?: string; priority?: string; labels?: string[] }): void {
+    const fields: string[] = []
+    const values: any[] = []
+    if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name) }
+    if (data.title !== undefined) { fields.push('title = ?'); values.push(data.title) }
+    if (data.description !== undefined) { fields.push('description = ?'); values.push(data.description) }
+    if (data.priority !== undefined) { fields.push('priority = ?'); values.push(data.priority) }
+    if (data.labels !== undefined) { fields.push('labels = ?'); values.push(data.labels.join(',')) }
+    if (fields.length === 0) return
+    values.push(id)
+    db.prepare(`UPDATE templates SET ${fields.join(', ')} WHERE id = ?`).run(...values)
+  },
+  delete(id: string): void {
+    db.prepare('DELETE FROM templates WHERE id = ?').run(id)
+  },
+  findById(id: string): Template | null {
+    const row = db.prepare('SELECT * FROM templates WHERE id = ?').get(id) as any
+    return row ? rowToTemplate(row) : null
+  },
+}
+
+// ===== Attachments =====
+export const attachmentRepo = {
+  findByTask(taskId: string): Attachment[] {
+    const rows = db.prepare(`
+      SELECT a.*, u.name as user_name
+      FROM attachments a JOIN users u ON a.user_id = u.id
+      WHERE a.task_id = ?
+      ORDER BY a.created_at DESC
+    `).all(taskId) as any[]
+    return rows.map(rowToAttachment)
+  },
+  findById(id: string): Attachment | null {
+    const row = db.prepare(`
+      SELECT a.*, u.name as user_name
+      FROM attachments a JOIN users u ON a.user_id = u.id
+      WHERE a.id = ?
+    `).get(id) as any
+    return row ? rowToAttachment(row) : null
+  },
+  create(data: {
+    taskId: string; userId: string; filename: string;
+    originalName: string; size: number; mimeType: string;
+  }): Attachment {
+    const id = genId()
+    db.prepare(
+      `INSERT INTO attachments (id, task_id, user_id, filename, original_name, size, mime_type, created_at)
+       VALUES (?,?,?,?,?,?,?,?)`,
+    ).run(id, data.taskId, data.userId, data.filename, data.originalName, data.size, data.mimeType, new Date().toISOString())
+    return this.findById(id)!
+  },
+  delete(id: string): void {
+    db.prepare('DELETE FROM attachments WHERE id = ?').run(id)
   },
 }
 
@@ -373,5 +466,18 @@ function rowToComment(r: any): Comment {
     id: r.id, taskId: r.task_id, userId: r.user_id,
     userName: r.user_name, avatarColor: r.avatar_color,
     content: r.content, createdAt: r.created_at,
+  }
+}
+function rowToTemplate(r: any): Template {
+  return {
+    id: r.id, name: r.name, title: r.title, description: r.description || '',
+    priority: r.priority, labels: parseLabels(r.labels), createdAt: r.created_at,
+  }
+}
+function rowToAttachment(r: any): Attachment {
+  return {
+    id: r.id, taskId: r.task_id, userId: r.user_id, userName: r.user_name,
+    filename: r.filename, originalName: r.original_name,
+    size: r.size, mimeType: r.mime_type, createdAt: r.created_at,
   }
 }

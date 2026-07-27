@@ -1,10 +1,12 @@
 // 创建/编辑项目的对话框
 
-import { useState, type ReactNode } from 'react'
-import { X } from 'lucide-react'
+import { useState, type ReactNode, useEffect } from 'react'
+import { X, User } from 'lucide-react'
 import { Button, Input, Textarea } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import type { ProjectStatus } from '../../shared/types'
+import { api } from '@/lib/api'
+import { useAppStore } from '@/stores/app'
+import type { ProjectStatus, User as UserType } from '../../shared/types'
 
 interface Props {
   open: boolean
@@ -14,9 +16,10 @@ interface Props {
     description: string
     status: ProjectStatus
     dueDate: string | null
+    ownerId?: string
   }) => Promise<void>
   title?: string
-  defaultValues?: Partial<{ name: string; description: string; status: ProjectStatus; dueDate: string }>
+  defaultValues?: Partial<{ name: string; description: string; status: ProjectStatus; dueDate: string; ownerId: string }>
 }
 
 const statusOptions: { value: ProjectStatus; label: string }[] = [
@@ -37,9 +40,28 @@ export default function ProjectDialog({
   const [description, setDescription] = useState(defaultValues?.description || '')
   const [status, setStatus] = useState<ProjectStatus>(defaultValues?.status || 'planning')
   const [dueDate, setDueDate] = useState(defaultValues?.dueDate?.slice(0, 10) || '')
+  const [ownerId, setOwnerId] = useState(defaultValues?.ownerId || '')
   const [loading, setLoading] = useState(false)
+  const [users, setUsers] = useState<UserType[]>([])
+  const currentUser = useAppStore((s) => s.user)
 
-  if (!open) return null
+  useEffect(() => {
+    if (open) {
+      api.listUsers().then((r) => setUsers(r.users || [])).catch(() => {})
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (open) {
+      setName(defaultValues?.name || '')
+      setDescription(defaultValues?.description || '')
+      setStatus(defaultValues?.status || 'planning')
+      setDueDate(defaultValues?.dueDate?.slice(0, 10) || '')
+      setOwnerId(defaultValues?.ownerId || '')
+    }
+  }, [open, defaultValues])
+
+  const isAdmin = currentUser?.role === 'admin'
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -50,6 +72,7 @@ export default function ProjectDialog({
         description,
         status,
         dueDate: dueDate ? new Date(dueDate).toISOString() : null,
+        ownerId: isAdmin && ownerId ? ownerId : undefined,
       })
       onClose()
     } finally {
@@ -101,6 +124,26 @@ export default function ProjectDialog({
               <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </div>
           </div>
+          {isAdmin && (
+            <div>
+              <label className="mb-1.5 flex items-center gap-1.5 text-xs text-muted">
+                <User className="h-3 w-3" /> 项目负责人
+              </label>
+              <select
+                value={ownerId}
+                onChange={(e) => setOwnerId(e.target.value)}
+                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand"
+              >
+                <option value="">默认(创建者)</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[11px] text-muted">创建后自动加入项目成员</p>
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" onClick={onClose}>
               取消
