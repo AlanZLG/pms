@@ -69,8 +69,8 @@ export const projectRepo = {
   create(data: { name: string; description: string; status: ProjectStatus; ownerId: string; dueDate: string | null }): Project {
     const id = genId()
     db.prepare(
-      'INSERT INTO projects (id, name, description, status, owner_id, progress, due_date, created_at) VALUES (?,?,?,?,0,?,?)',
-    ).run(id, data.name, data.description, data.status, data.ownerId, data.dueDate, new Date().toISOString())
+      'INSERT INTO projects (id, name, description, status, owner_id, progress, due_date, created_at) VALUES (?,?,?,?,?,?,?,?)',
+    ).run(id, data.name, data.description, data.status, data.ownerId, 0, data.dueDate, new Date().toISOString())
     // 创建者自动成为 owner 成员
     db.prepare(
       'INSERT INTO project_members (id, project_id, user_id, role, joined_at) VALUES (?,?,?,?,?)',

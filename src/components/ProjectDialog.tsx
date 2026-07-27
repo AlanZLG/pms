@@ -1,6 +1,6 @@
 // 创建/编辑项目的对话框
 
-import { useState, type ReactNode, useEffect } from 'react'
+import { useState, type ReactNode, useEffect, useCallback } from 'react'
 import { X, User } from 'lucide-react'
 import { Button, Input, Textarea } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -61,6 +61,15 @@ export default function ProjectDialog({
     }
   }, [open, defaultValues])
 
+  useEffect(() => {
+    if (!open) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, onClose])
+
   const isAdmin = currentUser?.role === 'admin'
 
   async function submit(e: React.FormEvent) {
@@ -79,6 +88,8 @@ export default function ProjectDialog({
       setLoading(false)
     }
   }
+
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
