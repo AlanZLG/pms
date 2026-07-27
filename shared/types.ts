@@ -13,6 +13,9 @@ export interface User {
   avatarColor: string
   role: UserRole
   createdAt: string
+  feishuOpenId?: string | null
+  feishuUnionId?: string | null
+  feishuBoundAt?: string | null
 }
 
 export interface Project {

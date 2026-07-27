@@ -124,6 +124,16 @@ CREATE TABLE IF NOT EXISTS attachments (
 CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);
 `)
 
+try {
+  const cols = (db.pragma('table_info(users)') as { name: string }[]).map(c => c.name)
+  if (!cols.includes('feishu_open_id')) {
+    db.exec('ALTER TABLE users ADD COLUMN feishu_open_id TEXT')
+    db.exec('ALTER TABLE users ADD COLUMN feishu_union_id TEXT')
+    db.exec('ALTER TABLE users ADD COLUMN feishu_bound_at DATETIME')
+    console.log('[db] 已添加飞书绑定字段到 users 表')
+  }
+} catch {}
+
 // 种子数据:若无用户则插入演示账号
 function seed() {
   const count = db.prepare('SELECT COUNT(*) as c FROM users').get() as { c: number }

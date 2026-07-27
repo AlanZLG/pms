@@ -10,6 +10,7 @@ import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notification
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import { sendMail, taskCompleteEmail } from '../lib/mail.ts'
+import { pushFeishuNotification } from '../lib/notifier.ts'
 import type { TaskStatus, TaskPriority } from '../../shared/types.ts'
 
 const router = Router()
@@ -81,6 +82,7 @@ router.post('/projects/:projectId/tasks', (req: AuthRequest, res: Response, next
           taskId: task.id,
           projectId: project.id,
         })
+        pushFeishuNotification(task.assigneeId, 'assign', '你被指派到任务', `「${task.title}」`)
       } catch {}
     }
     res.status(201).json({ task })
@@ -124,6 +126,7 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
             taskId: updated.id,
             projectId: updated.projectId,
           })
+          pushFeishuNotification(newAssignee, 'assign', '你被指派到任务', `「${updated.title}」`)
         } catch {}
       }
       if (prevAssignee && prevAssignee !== req.userId && prevAssignee !== newAssignee) {
@@ -136,6 +139,7 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
             taskId: updated.id,
             projectId: updated.projectId,
           })
+          pushFeishuNotification(prevAssignee, 'assign', '你已被解除指派', `任务「${updated.title}」不再分配给你`)
         } catch {}
       }
     }
@@ -183,6 +187,7 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
             taskId: task.id,
             projectId: task.projectId,
           })
+          pushFeishuNotification(task.assigneeId, 'status', `任务状态变更为「${label[parsed.data.status]}」`, `「${task.title}」`)
         } catch {}
         // 任务完成时发送邮件通知
         if (parsed.data.status === 'done') {
@@ -237,6 +242,7 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
           taskId: task.id,
           projectId: task.projectId,
         })
+        pushFeishuNotification(task.assigneeId, 'comment', '有人评论了你负责的任务', parsed.data.content.slice(0, 60))
       } catch {}
     }
     // 解析 @提及 并发送通知
@@ -253,6 +259,7 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
             taskId: task.id,
             projectId: task.projectId,
           })
+          pushFeishuNotification(mentioned.id, 'comment', `你被 @ 提及了`, parsed.data.content.slice(0, 60))
         } catch {}
       }
     }

@@ -196,4 +196,12 @@ export const api = {
     request<{ ok: boolean }>('/api/notifications/read-all', { method: 'POST' }),
   deleteNotification: (id: string) =>
     request<{ ok: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' }),
+
+  // feishu
+  getFeishuBindUrl: () =>
+    request<{ authUrl: string }>('/api/feishu/bind'),
+  getFeishuStatus: () =>
+    request<{ bound: boolean; feishuName?: string; openId?: string; boundAt?: string; configured: boolean }>('/api/feishu/status'),
+  unbindFeishu: () =>
+    request<{ success: boolean }>('/api/feishu/unbind', { method: 'POST' }),
 }

@@ -35,6 +35,16 @@ export const userRepo = {
   updateRole(id: string, role: string): void {
     db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, id)
   },
+  bindFeishu(id: string, openId: string, unionId: string): void {
+    db.prepare(
+      'UPDATE users SET feishu_open_id = ?, feishu_union_id = ?, feishu_bound_at = ? WHERE id = ?',
+    ).run(openId, unionId, new Date().toISOString(), id)
+  },
+  unbindFeishu(id: string): void {
+    db.prepare(
+      'UPDATE users SET feishu_open_id = NULL, feishu_union_id = NULL, feishu_bound_at = NULL WHERE id = ?',
+    ).run(id)
+  },
 }
 
 // ===== Projects =====
@@ -443,6 +453,9 @@ function rowToUser(r: any): User {
   return {
     id: r.id, email: r.email, name: r.name, avatarColor: r.avatar_color,
     role: r.role, createdAt: r.created_at,
+    feishuOpenId: r.feishu_open_id || null,
+    feishuUnionId: r.feishu_union_id || null,
+    feishuBoundAt: r.feishu_bound_at || null,
   }
 }
 function rowToProject(r: any): Project {
