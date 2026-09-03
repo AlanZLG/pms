@@ -13,19 +13,34 @@ import {
   Menu,
   ChevronLeft,
   Sparkles,
+  Sun,
+  Moon,
+  Trash2,
+  Layers,
+  Shield,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/app'
 import { useNotificationStore } from '@/stores/notifications'
+import { useTheme } from '@/hooks/useTheme'
 import { Avatar } from '@/components/ui'
 import NotificationDropdown from '@/components/NotificationDropdown'
+import GlobalSearch from '@/components/GlobalSearch'
 
 const navItems = [
   { to: '/', label: '仪表板', icon: LayoutDashboard, end: true },
   { to: '/projects', label: '项目', icon: FolderKanban },
   { to: '/stats', label: '统计', icon: BarChart3 },
+  { to: '/hours', label: '工时报表', icon: BarChart3 },
   { to: '/team', label: '团队', icon: Users },
   { to: '/notifications', label: '通知', icon: Bell },
+  { to: '/trash', label: '回收站', icon: Trash2 },
+]
+
+// 管理员专属菜单
+const adminNavItems = [
+  { to: '/templates', label: '项目模板', icon: Layers },
+  { to: '/roles', label: '角色管理', icon: Shield },
 ]
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -36,11 +51,20 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const nav = useNavigate()
   const fetchNotif = useNotificationStore((s) => s.fetch)
   const resetNotif = useNotificationStore((s) => s.reset)
+  const startPolling = useNotificationStore((s) => s.startPolling)
+  const stopPolling = useNotificationStore((s) => s.stopPolling)
+  const { isDark, toggleTheme } = useTheme()
 
   useEffect(() => {
-    if (user) fetchNotif()
-    else resetNotif()
-  }, [user, fetchNotif, resetNotif])
+    if (user) {
+      fetchNotif()
+      startPolling()
+    } else {
+      stopPolling()
+      resetNotif()
+    }
+    return () => stopPolling()
+  }, [user, fetchNotif, resetNotif, startPolling, stopPolling])
 
   return (
     <div className="app-bg flex h-full min-h-0">
@@ -69,29 +93,37 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         {/* 顶栏 */}
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-bg-border bg-bg/70 px-4 py-3 backdrop-blur md:px-6">
           <button
-            className="rounded-lg p-2 text-slate-300 hover:bg-bg-soft md:hidden"
+            className="rounded-lg p-2 text-text-secondary hover:bg-bg-soft md:hidden"
             onClick={() => setMobileOpen(true)}
           >
             <Menu className="h-5 w-5" />
           </button>
           <button
-            className="hidden rounded-lg p-2 text-slate-300 hover:bg-bg-soft md:block"
+            className="hidden rounded-lg p-2 text-text-secondary hover:bg-bg-soft md:block"
             onClick={() => setCollapsed((c) => !c)}
           >
             {collapsed ? <Menu className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
           </button>
 
           <div className="ml-auto flex items-center gap-3">
+            <GlobalSearch />
+            <button
+              onClick={toggleTheme}
+              className="rounded-lg p-2 text-muted hover:bg-bg-soft hover:text-text-primary transition-colors"
+              title={isDark ? '切换到亮色模式' : '切换到暗色模式'}
+            >
+              {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+            </button>
             <NotificationDropdown />
             <div className="hidden items-center gap-1.5 rounded-full border border-brand/30 bg-brand/5 px-3 py-1 text-xs text-brand-soft sm:flex">
               <Sparkles className="h-3.5 w-3.5" />
-              Atlas PM
+              Fortune PM
             </div>
             {user && (
               <div className="flex items-center gap-2">
                 <Avatar name={user.name} color={user.avatarColor} size={32} />
                 <div className="hidden text-right sm:block">
-                  <p className="text-sm font-medium leading-tight text-slate-100">{user.name}</p>
+                  <p className="text-sm font-medium leading-tight text-text-primary">{user.name}</p>
                   <p className="text-[11px] leading-tight text-muted">{roleLabel(user.role)}</p>
                 </div>
                 <button
@@ -123,16 +155,18 @@ function SidebarContent({
   onNavigate?: () => void
 }) {
   const unread = useNotificationStore((s) => s.unread)
+  const user = useAppStore((s) => s.user)
+  const isAdmin = user?.role === 'admin'
 
   return (
     <>
       <div className="flex h-16 items-center gap-2.5 px-4">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-grad text-white shadow-glow">
+        <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-grad text-text-primary shadow-glow">
           <Sparkles className="h-5 w-5" />
         </div>
         {!collapsed && (
           <div>
-            <p className="font-display text-lg leading-none text-slate-100">Atlas</p>
+            <p className="font-display text-lg leading-none text-text-primary">Fortune</p>
             <p className="text-[11px] text-muted">项目管理系统</p>
           </div>
         )}
@@ -150,8 +184,8 @@ function SidebarContent({
                 cn(
                   'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
                   isActive
-                    ? 'bg-brand/12 text-white shadow-glow'
-                    : 'text-slate-400 hover:bg-bg-elev hover:text-slate-100',
+                    ? 'bg-brand/12 text-text-primary shadow-glow'
+                    : 'text-muted hover:bg-bg-elev hover:text-text-primary',
                   collapsed && 'justify-center',
                 )
               }
@@ -159,7 +193,7 @@ function SidebarContent({
               <span className="relative">
                 <item.icon className="h-5 w-5" />
                 {isNotif && unread > 0 && (
-                  <span className="absolute -right-1.5 -top-1.5 grid h-4 min-w-[16px] place-items-center rounded-full bg-danger px-1 text-[9px] font-semibold text-white">
+                  <span className="absolute -right-1.5 -top-1.5 grid h-4 min-w-[16px] place-items-center rounded-full bg-danger px-1 text-[9px] font-semibold text-text-primary">
                     {unread > 99 ? '99+' : unread}
                   </span>
                 )}
@@ -175,6 +209,31 @@ function SidebarContent({
             </NavLink>
           )
         })}
+        {/* 管理员专属菜单 */}
+        {isAdmin && (
+          <>
+            <div className="my-2 border-t border-bg-border" />
+            {adminNavItems.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                onClick={onNavigate}
+                className={({ isActive }) =>
+                  cn(
+                    'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition',
+                    isActive
+                      ? 'bg-brand/12 text-text-primary shadow-glow'
+                      : 'text-muted hover:bg-bg-elev hover:text-text-primary',
+                    collapsed && 'justify-center',
+                  )
+                }
+              >
+                <item.icon className="h-5 w-5" />
+                {!collapsed && <span className="flex-1">{item.label}</span>}
+              </NavLink>
+            ))}
+          </>
+        )}
       </nav>
       <div className="border-t border-bg-border p-3">
         <NavLink
@@ -183,7 +242,7 @@ function SidebarContent({
           className={({ isActive }) =>
             cn(
               'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition',
-              isActive ? 'bg-brand/12 text-white' : 'text-slate-400 hover:bg-bg-elev hover:text-slate-100',
+              isActive ? 'bg-brand/12 text-text-primary' : 'text-muted hover:bg-bg-elev hover:text-text-primary',
               collapsed && 'justify-center',
             )
           }
@@ -197,5 +256,5 @@ function SidebarContent({
 }
 
 function roleLabel(role: string) {
-  return role === 'admin' ? '系统管理员' : role === 'owner' ? '项目负责人' : role === 'guest' ? '访客' : '团队成员'
+  return role === 'admin' ? '系统管理员' : role === 'finance' ? '财务人员' : role === 'owner' ? '项目负责人' : role === 'guest' ? '访客' : '团队成员'
 }

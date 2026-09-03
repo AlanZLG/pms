@@ -16,7 +16,7 @@ export function Avatar({
 }) {
   return (
     <div
-      className="flex items-center justify-center rounded-full font-semibold text-white shadow-sm ring-2 ring-bg/40"
+      className="flex items-center justify-center rounded-full font-semibold text-text-primary shadow-sm ring-2 ring-bg/40"
       style={{ width: size, height: size, backgroundColor: color, fontSize: size * 0.42 }}
       title={name}
     >
@@ -45,7 +45,7 @@ export function PriorityBadge({ priority }: { priority: TaskPriority }) {
 
 // 状态徽章
 const statusStyle: Record<TaskStatus, { bg: string; text: string; label: string }> = {
-  todo: { bg: 'bg-slate-500/15', text: 'text-slate-300', label: '待办' },
+  todo: { bg: 'bg-slate-500/15', text: 'text-text-secondary', label: '待办' },
   in_progress: { bg: 'bg-warn/15', text: 'text-warn', label: '进行中' },
   review: { bg: 'bg-sky-500/15', text: 'text-sky-300', label: '审核中' },
   done: { bg: 'bg-ok/15', text: 'text-ok', label: '已完成' },
@@ -84,10 +84,10 @@ export function Button({
   const base =
     'inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none'
   const variants = {
-    primary: 'bg-brand text-white hover:bg-brand-deep shadow-glow',
-    ghost: 'border border-bg-border text-slate-200 hover:bg-bg-soft',
+    primary: 'bg-brand text-text-primary hover:bg-brand-deep shadow-glow',
+    ghost: 'border border-bg-border text-text-secondary hover:bg-bg-soft',
     soft: 'bg-brand/10 text-brand-soft hover:bg-brand/20',
-    danger: 'bg-danger/90 text-white hover:bg-danger',
+    danger: 'bg-danger/90 text-text-primary hover:bg-danger',
   }
   const sizes = { sm: 'px-2.5 py-1.5 text-xs', md: 'px-4 py-2 text-sm' }
   return (
@@ -103,7 +103,7 @@ export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={cn(
-        'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
+        'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
         props.className,
       )}
     />
@@ -117,7 +117,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
         {...props}
         ref={ref}
         className={cn(
-          'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
+          'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
           props.className,
         )}
       />
@@ -138,7 +138,7 @@ export function Card({ className, children }: { className?: string; children: Re
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-bg-border py-16 text-center">
-      <p className="font-display text-lg text-slate-200">{title}</p>
+      <p className="font-display text-lg text-text-secondary">{title}</p>
       {hint && <p className="mt-1 text-sm text-muted">{hint}</p>}
     </div>
   )

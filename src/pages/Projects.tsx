@@ -2,27 +2,34 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Plus, Search, FolderKanban, ArrowRight, Download } from 'lucide-react'
-import { useAsync } from '@/hooks/useAsync'
+import { Plus, Search, ArrowRight, Download } from 'lucide-react'
+import { useSwr } from '@/lib/cache'
+import { useDebounce } from '@/hooks/useDebounce'
 import { api } from '@/lib/api'
-import { Card, Button, Input, Skeleton, EmptyState, Avatar } from '@/components/ui'
+import { getErrorMessage } from '@/lib/errors'
+import { Card, Button, Input, EmptyState, Avatar } from '@/components/ui'
+import { CardSkeleton } from '@/components/Skeleton'
 import ProjectDialog, { ProjectStatusBadge } from '@/components/ProjectDialog'
 import { useAppStore } from '@/stores/app'
 import { fmtDate } from '@/lib/date'
 import type { Project } from '../../shared/types'
 
 export default function Projects() {
-  const projects = useAsync<Project[]>(() => api.listProjects().then((r) => r.projects), [])
   const [open, setOpen] = useState(false)
   const [keyword, setKeyword] = useState('')
+  const debouncedKeyword = useDebounce(keyword, 300)
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all')
+  const projects = useSwr<Project[]>(
+    `projects:list:kw=${debouncedKeyword}:status=${filter}`,
+    () => api.listProjects().then((r) => r.projects),
+  )
   const notify = useAppStore((s) => s.notify)
-  const reload = projects.reload
+  const reload = projects.revalidate
 
   const filtered = (projects.data || []).filter((p) => {
     if (filter === 'active' && p.status !== 'active') return false
     if (filter === 'completed' && p.status !== 'completed') return false
-    if (keyword && !p.name.includes(keyword) && !p.description.includes(keyword)) return false
+    if (debouncedKeyword && !p.name.includes(debouncedKeyword) && !p.description.includes(debouncedKeyword)) return false
     return true
   })
 
@@ -30,11 +37,18 @@ export default function Projects() {
     <div className="space-y-6 animate-fade-up">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-display text-2xl text-white">项目</h2>
+          <h2 className="font-display text-2xl text-text-primary">项目</h2>
           <p className="mt-1 text-sm text-muted">管理你的全部项目与协作进度</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => api.exportProjectsCsv()}>
+          <Button variant="ghost" size="sm" onClick={async () => {
+            try {
+              await api.exportProjectsCsv()
+              notify('success', '项目导出成功')
+            } catch (e) {
+              notify('error', getErrorMessage(e, '导出失败'))
+            }
+          }}>
             <Download className="h-4 w-4" /> 导出 CSV
           </Button>
           <Button onClick={() => setOpen(true)}>
@@ -60,7 +74,7 @@ export default function Projects() {
               onClick={() => setFilter(v)}
               className={
                 'rounded-md px-3 py-1.5 text-xs font-medium transition ' +
-                (filter === v ? 'bg-brand text-white shadow-glow' : 'text-muted hover:text-slate-200')
+                (filter === v ? 'bg-brand text-text-primary shadow-glow' : 'text-muted hover:text-text-secondary')
               }
             >
               {l}
@@ -72,7 +86,7 @@ export default function Projects() {
       {projects.loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-40" />
+            <CardSkeleton key={i} rows={4} />
           ))}
         </div>
       ) : filtered.length === 0 ? (
@@ -86,12 +100,12 @@ export default function Projects() {
                   <ProjectStatusBadge status={p.status} />
                   <ArrowRight className="h-4 w-4 text-muted transition group-hover:translate-x-1 group-hover:text-brand-soft" />
                 </div>
-                <h3 className="mb-1 font-display text-lg text-slate-100">{p.name}</h3>
+                <h3 className="mb-1 font-display text-lg text-text-primary">{p.name}</h3>
                 <p className="mb-4 line-clamp-2 min-h-[2.5rem] text-sm text-muted">{p.description}</p>
                 <div className="mb-4">
                   <div className="mb-1 flex items-center justify-between text-xs text-muted">
                     <span>进度</span>
-                    <span className="font-mono text-slate-200">{p.progress}%</span>
+                    <span className="font-mono text-text-secondary">{p.progress}%</span>
                   </div>
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-soft">
                     <div

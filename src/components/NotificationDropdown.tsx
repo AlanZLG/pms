@@ -16,7 +16,7 @@ const colorMap = {
   assign: 'bg-brand/20 text-brand',
   status: 'bg-amber-500/20 text-amber-300',
   comment: 'bg-emerald-500/20 text-emerald-300',
-  system: 'bg-slate-500/20 text-slate-300',
+  system: 'bg-slate-500/20 text-text-secondary',
 }
 
 export default function NotificationDropdown() {
@@ -56,12 +56,12 @@ export default function NotificationDropdown() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="relative rounded-lg p-2 text-slate-300 hover:bg-bg-soft"
+        className="relative rounded-lg p-2 text-text-secondary hover:bg-bg-soft"
         title="通知"
       >
         <Bell className="h-5 w-5" />
         {unread > 0 && (
-          <span className="absolute right-1.5 top-1.5 grid h-4 min-w-[16px] place-items-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
+          <span className="absolute right-1.5 top-1.5 grid h-4 min-w-[16px] place-items-center rounded-full bg-danger px-1 text-[10px] font-semibold text-text-primary">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
@@ -70,7 +70,7 @@ export default function NotificationDropdown() {
       {open && (
         <div className="absolute right-0 top-full z-50 mt-2 w-[360px] overflow-hidden rounded-xl border border-bg-border bg-bg-soft shadow-2xl">
           <div className="flex items-center justify-between border-b border-bg-border px-4 py-3">
-            <p className="text-sm font-semibold text-slate-100">通知</p>
+            <p className="text-sm font-semibold text-text-primary">通知</p>
             <div className="flex items-center gap-2">
               {unread > 0 && (
                 <button
@@ -83,7 +83,7 @@ export default function NotificationDropdown() {
               )}
               <button
                 onClick={() => setOpen(false)}
-                className="rounded p-1 text-muted hover:bg-bg hover:text-slate-200"
+                className="rounded p-1 text-muted hover:bg-bg hover:text-text-secondary"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -113,7 +113,7 @@ export default function NotificationDropdown() {
                           <Icon className="h-4 w-4" />
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="flex items-center gap-1.5 text-sm text-slate-100">
+                          <p className="flex items-center gap-1.5 text-sm text-text-primary">
                             <span className="truncate">{n.title}</span>
                             {!n.read && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />}
                           </p>

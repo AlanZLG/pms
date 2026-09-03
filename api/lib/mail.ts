@@ -31,7 +31,7 @@ export async function sendMail(to: string, subject: string, html: string) {
   }
   try {
     await t.sendMail({
-      from: process.env.SMTP_FROM || `Atlas <${process.env.SMTP_USER}>`,
+      from: process.env.SMTP_FROM || `Fortune <${process.env.SMTP_USER}>`,
       to,
       subject,
       html,
@@ -64,7 +64,7 @@ export function taskCompleteEmail(taskTitle: string, projectName: string, userNa
           </div>
         </div>
         <p style="margin-top: 24px; color: #64748B; font-size: 13px;">
-          此邮件由 Atlas 项目管理系统自动发送,请勿直接回复。
+          此邮件由 Fortune 项目管理系统自动发送,请勿直接回复。
         </p>
       </div>
     </div>

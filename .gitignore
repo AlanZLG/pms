@@ -26,3 +26,4 @@ dist-ssr
 
 # SQLite 运行时数据
 data/
+*.db

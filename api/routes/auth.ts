@@ -5,7 +5,8 @@ import bcrypt from 'bcrypt'
 import { z } from 'zod'
 import { userRepo } from '../repository/repo.ts'
 import { signToken, authRequired, type AuthRequest } from '../lib/auth.ts'
-import { ApiError, genId } from '../lib/utils.ts'
+import { ApiError } from '../lib/utils.ts'
+import { rateLimit } from '../lib/rateLimit.ts'
 
 const router = Router()
 
@@ -13,11 +14,11 @@ const palette = ['#6366F1', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#06B6D4
 
 const registerSchema = z.object({
   email: z.string().email('邮箱格式不正确'),
-  password: z.string().min(6, '密码至少 6 位'),
+  password: z.string().min(5, '密码至少 5 位'),
   name: z.string().min(1, '昵称不能为空').max(40),
 })
 
-router.post('/register', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/register', rateLimit(60_000, 5, 'register'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = registerSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
@@ -41,7 +42,7 @@ const loginSchema = z.object({
   password: z.string().min(1),
 })
 
-router.post('/login', async (req: Request, res: Response, next: NextFunction) => {
+router.post('/login', rateLimit(60_000, 10, 'login'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const parsed = loginSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, '邮箱或密码错误')
@@ -61,6 +62,20 @@ router.get('/me', authRequired, (req: AuthRequest, res: Response, next: NextFunc
     const user = userRepo.findById(req.userId!)
     if (!user) throw new ApiError(404, '用户不存在')
     res.json({ user })
+  } catch (e) { next(e) }
+})
+
+const updateProfileSchema = z.object({
+  name: z.string().min(1, '昵称不能为空').max(40, '昵称不能超过40个字符'),
+})
+
+router.put('/me', authRequired, (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const parsed = updateProfileSchema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const updated = userRepo.updateName(req.userId!, parsed.data.name)
+    if (!updated) throw new ApiError(404, '用户不存在')
+    res.json({ user: updated })
   } catch (e) { next(e) }
 })
 

@@ -1,14 +1,16 @@
 // 任务详情抽屉(含评论 + 附件)
 
-import { useEffect, useState, useRef, useCallback } from 'react'
-import { X, Send, Trash2, Calendar, Flag, Tag, Check, Plus, AtSign, Paperclip, Download, FileText, FileImage, FileCode } from 'lucide-react'
+import { useEffect, useState, useRef } from 'react'
+import { X, Send, Trash2, Calendar, Flag, Tag, Check, Plus, AtSign, Paperclip, Download, FileText, FileImage, FileCode, ChevronDown, ChevronUp, Clock, UserPlus, Activity, Calendar as CalendarIcon, Trash2 as RestoreIcon, Sparkles, ArrowRight } from 'lucide-react'
 import { api } from '@/lib/api'
+import { getErrorMessage } from '@/lib/errors'
 import { Avatar, Button, PriorityBadge, StatusBadge, LabelTag, Textarea, Input } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
 import { useAsync } from '@/hooks/useAsync'
 import { fromNow, dueLabel } from '@/lib/date'
-import { cn } from '@/lib/utils'
-import type { Task, Comment, Subtask, User, Attachment } from '../../shared/types'
+import { cn, sortUsers } from '@/lib/utils'
+import { inlineDiff, parseChangeDetail } from '@/lib/diff'
+import type { Task, Comment, Subtask, User, Attachment, TaskHistory } from '../../shared/types'
 
 interface Props {
   taskId: string | null
@@ -21,6 +23,9 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
   const [comments, setComments] = useState<Comment[]>([])
   const [subtasks, setSubtasks] = useState<Subtask[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [history, setHistory] = useState<TaskHistory[]>([])
+  const [historyExpanded, setHistoryExpanded] = useState(true)
+  const [showAllHistory, setShowAllHistory] = useState(false)
   const [newSubtask, setNewSubtask] = useState('')
   const [subtaskBusy, setSubtaskBusy] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -40,9 +45,9 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
   const [showMention, setShowMention] = useState(false)
   const [mentionStart, setMentionStart] = useState(-1)
 
-  const filteredUsers = allUsers.filter(
+  const filteredUsers = sortUsers(allUsers.filter(
     (u) => u.name.toLowerCase().includes(mentionQuery.toLowerCase()) && u.id !== user?.id,
-  )
+  ))
 
   function handleCommentChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const value = e.target.value
@@ -102,6 +107,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
       return
     }
     setLoading(true)
+    setShowAllHistory(false)
     api
       .getTask(taskId)
       .then((r) => {
@@ -109,6 +115,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
         setComments(r.comments)
         setSubtasks(r.subtasks || [])
         setAttachments(r.attachments || [])
+        setHistory(r.history || [])
       })
       .finally(() => setLoading(false))
   }, [taskId])
@@ -121,8 +128,8 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
       setSubtasks((prev) => [...prev, s])
       setNewSubtask('')
       refreshComments()
-    } catch (e: any) {
-      notify('error', e?.message || '添加失败')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '添加失败'))
     } finally {
       setSubtaskBusy(false)
     }
@@ -133,9 +140,9 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     try {
       await api.updateSubtask(s.id, { done: !s.done })
       refreshComments()
-    } catch (e: any) {
+    } catch (e) {
       setSubtasks((prev) => prev.map((x) => (x.id === s.id ? { ...x, done: s.done } : x)))
-      notify('error', e?.message || '更新失败')
+      notify('error', getErrorMessage(e, '更新失败'))
     }
   }
 
@@ -145,28 +152,20 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     try {
       await api.deleteSubtask(s.id)
       refreshComments()
-    } catch (e: any) {
+    } catch (e) {
       setSubtasks(prev)
-      notify('error', e?.message || '删除失败')
+      notify('error', getErrorMessage(e, '删除失败'))
     }
   }
-
-  const refreshTaskData = useCallback(async () => {
-    if (!task) return
-    try {
-      const r = await api.getTask(task.id)
-      setComments(r.comments)
-      setSubtasks(r.subtasks || [])
-      setAttachments(r.attachments || [])
-    } catch {}
-  }, [task])
 
   async function refreshComments() {
     if (!task) return
     try {
       const r = await api.getTask(task.id)
       setComments(r.comments)
-    } catch {}
+    } catch {
+      // 忽略刷新错误
+    }
   }
 
   async function postComment() {
@@ -176,8 +175,8 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
       const { comment: c } = await api.addComment(task.id, comment.trim())
       setComments((prev) => [...prev, c])
       setComment('')
-    } catch (e: any) {
-      notify('error', e?.message || '评论失败')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '评论失败'))
     } finally {
       setPosting(false)
     }
@@ -201,8 +200,8 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
         setAttachments((prev) => [att, ...prev])
       }
       notify('success', '附件已上传')
-    } catch (e: any) {
-      notify('error', e?.message || '上传失败')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '上传失败'))
     } finally {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
@@ -215,8 +214,8 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
       await api.deleteAttachment(id)
       setAttachments((prev) => prev.filter((a) => a.id !== id))
       notify('success', '附件已删除')
-    } catch (e: any) {
-      notify('error', e?.message || '删除失败')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '删除失败'))
     }
   }
 
@@ -261,15 +260,15 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                 <StatusBadge status={task.status} />
                 <PriorityBadge priority={task.priority} />
               </div>
-              <button onClick={onClose} className="text-muted hover:text-slate-100">
+              <button onClick={onClose} className="text-muted hover:text-text-primary">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             <div className="flex-1 overflow-auto px-5 py-4">
-              <h2 className="mb-3 font-display text-2xl text-white">{task.title}</h2>
+              <h2 className="mb-3 font-display text-2xl text-text-primary">{task.title}</h2>
               {task.description ? (
-                <p className="mb-4 whitespace-pre-wrap text-sm leading-relaxed text-slate-300">
+                <p className="mb-4 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">
                   {task.description}
                 </p>
               ) : (
@@ -286,7 +285,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                       due.tone === 'overdue' && 'text-danger',
                       due.tone === 'soon' && 'text-warn',
                       due.tone === 'none' && 'text-muted',
-                      due.tone === 'normal' && 'text-slate-200',
+                      due.tone === 'normal' && 'text-text-secondary',
                     )}
                   >
                     {due.text}
@@ -315,7 +314,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
               {/* 附件 */}
               <div className="mt-6">
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-display text-base text-slate-100">
+                  <h3 className="font-display text-base text-text-primary">
                     附件 ({attachments.length})
                   </h3>
                   <div className="flex items-center gap-2">
@@ -346,7 +345,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                     >
                       {getFileIcon(a.mimeType)}
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm text-slate-200" title={a.originalName}>
+                        <div className="truncate text-sm text-text-secondary" title={a.originalName}>
                           {a.originalName}
                         </div>
                         <div className="text-xs text-muted">
@@ -381,7 +380,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
               {/* 子任务清单 */}
               <div className="mt-6">
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="font-display text-base text-slate-100">
+                  <h3 className="font-display text-base text-text-primary">
                     子任务 ({subtasks.filter((s) => s.done).length}/{subtasks.length})
                   </h3>
                   {subtasks.length > 0 && (
@@ -403,7 +402,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                         className={cn(
                           'flex h-5 w-5 shrink-0 items-center justify-center rounded border transition',
                           s.done
-                            ? 'border-ok bg-ok text-white'
+                            ? 'border-ok bg-ok text-text-primary'
                             : 'border-bg-border hover:border-brand',
                         )}
                       >
@@ -412,7 +411,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                       <span
                         className={cn(
                           'flex-1 text-sm transition',
-                          s.done ? 'text-muted line-through' : 'text-slate-200',
+                          s.done ? 'text-muted line-through' : 'text-text-secondary',
                         )}
                       >
                         {s.title}
@@ -451,9 +450,75 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                 </div>
               </div>
 
+              {/* 操作历史 */}
+              <div className="mt-6">
+                <button
+                  onClick={() => setHistoryExpanded((v) => !v)}
+                  className="mb-3 flex w-full items-center justify-between"
+                >
+                  <h3 className="font-display text-base text-text-primary">操作历史 ({history.length})</h3>
+                  {historyExpanded ? (
+                    <ChevronUp className="h-4 w-4 text-muted" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-muted" />
+                  )}
+                </button>
+                {historyExpanded && (
+                  <>
+                    <ul className="space-y-0">
+                      {(showAllHistory ? history : history.slice(0, 20)).map((h, i) => {
+                        const parsed = h.detail ? parseChangeDetail(h.detail) : null
+                        const Icon = getHistoryIcon(h.action)
+                        const isLast = i === (showAllHistory ? history.length : Math.min(history.length, 20)) - 1
+                        return (
+                          <li key={h.id} className="relative flex gap-3 pb-3">
+                            {!isLast && (
+                              <div className="absolute left-[15px] top-8 bottom-0 w-px bg-bg-border" />
+                            )}
+                            <div className="relative z-10 mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-bg-border bg-bg-panel text-muted">
+                              <Icon className="h-4 w-4" />
+                            </div>
+                            <div className="min-w-0 flex-1 pt-1">
+                              <div className="text-sm">
+                                {parsed ? (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    <span className="font-medium text-text-secondary">{parsed.field}:</span>
+                                    <DiffedValue oldVal={parsed.old} newVal={parsed.new} />
+                                  </div>
+                                ) : (
+                                  <span className="text-text-secondary">{h.detail || h.action}</span>
+                                )}
+                              </div>
+                              <div className="mt-0.5 flex items-center gap-2 text-xs text-muted">
+                                <span className="font-medium text-text-secondary/80">{h.userName || '未知用户'}</span>
+                                <span>·</span>
+                                <span>{fromNow(h.createdAt)}</span>
+                              </div>
+                            </div>
+                          </li>
+                        )
+                      })}
+                      {history.length === 0 && (
+                        <li className="rounded-xl border border-dashed border-bg-border px-3 py-6 text-center text-sm text-muted">
+                          暂无操作记录
+                        </li>
+                      )}
+                    </ul>
+                    {history.length > 20 && (
+                      <button
+                        onClick={() => setShowAllHistory((v) => !v)}
+                        className="mt-2 w-full rounded-lg border border-bg-border bg-bg-panel/30 py-2 text-xs text-muted transition hover:bg-bg-panel hover:text-text-secondary"
+                      >
+                        {showAllHistory ? '收起' : `查看更多 (${history.length - 20} 条)`}
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+
               {/* 评论 */}
               <div className="mt-6">
-                <h3 className="mb-3 font-display text-base text-slate-100">评论 ({comments.length})</h3>
+                <h3 className="mb-3 font-display text-base text-text-primary">评论 ({comments.length})</h3>
                 <ul className="space-y-3">
                   {comments.map((c) => {
                     const isSystem = c.content.startsWith('—') && c.content.endsWith('—')
@@ -468,14 +533,14 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                           }
                         >
                           <div className="flex items-center justify-between text-xs text-muted">
-                            <span className="font-medium text-slate-200">{c.userName}</span>
+                            <span className="font-medium text-text-secondary">{c.userName}</span>
                             <span>{fromNow(c.createdAt)}</span>
                           </div>
                           <p
                             className={
                               isSystem
                                 ? 'mt-1 text-sm italic text-muted'
-                                : 'mt-1 whitespace-pre-wrap text-sm text-slate-200'
+                                : 'mt-1 whitespace-pre-wrap text-sm text-text-secondary'
                             }
                           >
                             {isSystem
@@ -523,7 +588,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                               'flex cursor-pointer items-center gap-2 px-3 py-2 text-sm transition',
                               i === mentionIndex
                                 ? 'bg-brand/15 text-brand-soft'
-                                : 'text-slate-200 hover:bg-bg',
+                                : 'text-text-secondary hover:bg-bg',
                             )}
                             onMouseEnter={() => setMentionIndex(i)}
                           >
@@ -564,4 +629,46 @@ function renderCommentWithMentions(content: string) {
     }
     return part
   })
+}
+
+function getHistoryIcon(action: string) {
+  const map: Record<string, typeof Sparkles> = {
+    create: Sparkles,
+    status_change: Activity,
+    assignee_change: UserPlus,
+    progress_update: Clock,
+    date_update: CalendarIcon,
+    trash: Trash2,
+    restore: RestoreIcon,
+  }
+  return map[action] || Activity
+}
+
+function DiffedValue({ oldVal, newVal }: { oldVal: string; newVal: string }) {
+  const segments = inlineDiff(oldVal, newVal)
+  const hasAdded = segments.some((s) => s.type === 'added')
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+      <span className="text-danger line-through decoration-danger/60">
+        {oldVal}
+      </span>
+      <ArrowRight className="h-3 w-3 shrink-0 text-muted" />
+      <span className="text-ok">
+        {hasAdded ? (
+          segments.map((seg, i) => {
+            if (seg.type === 'added') {
+              return (
+                <span key={i} className="rounded bg-ok/10 px-0.5">
+                  {seg.text}
+                </span>
+              )
+            }
+            return <span key={i}>{seg.text}</span>
+          })
+        ) : (
+          <span className="rounded bg-ok/10 px-0.5">{newVal}</span>
+        )}
+      </span>
+    </span>
+  )
 }

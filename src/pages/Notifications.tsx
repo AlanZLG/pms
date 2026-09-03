@@ -35,7 +35,7 @@ const colorMap = {
   assign: 'bg-brand/20 text-brand',
   status: 'bg-amber-500/20 text-amber-300',
   comment: 'bg-emerald-500/20 text-emerald-300',
-  system: 'bg-slate-500/20 text-slate-300',
+  system: 'bg-bg-soft text-text-secondary',
 }
 
 export default function Notifications() {
@@ -88,7 +88,7 @@ export default function Notifications() {
     <div className="space-y-6 animate-fade-up">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-display text-2xl text-white">通知中心</h2>
+          <h2 className="font-display text-2xl text-text-primary">通知中心</h2>
           <p className="mt-1 text-sm text-muted">
             管理系统通知与消息提醒 · 共 {items.length} 条,{unread} 条未读
           </p>
@@ -120,8 +120,8 @@ export default function Notifications() {
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition',
                 isActive
-                  ? 'bg-brand text-white shadow-glow'
-                  : 'bg-bg-soft text-muted hover:text-slate-200',
+                  ? 'bg-brand text-text-primary shadow-glow'
+                  : 'bg-bg-soft text-muted hover:text-text-secondary',
               )}
             >
               <tab.icon className="h-3.5 w-3.5" />
@@ -129,7 +129,7 @@ export default function Notifications() {
               <span
                 className={cn(
                   'ml-0.5 rounded-full px-1.5 py-0.5 text-[10px]',
-                  isActive ? 'bg-white/20 text-white' : 'bg-bg text-muted',
+                  isActive ? 'bg-white/20 text-text-primary' : 'bg-bg text-muted',
                 )}
               >
                 {count}
@@ -175,7 +175,7 @@ export default function Notifications() {
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <p className="truncate text-sm font-medium text-slate-100">
+                        <p className="truncate text-sm font-medium text-text-primary">
                           {n.title}
                         </p>
                         {!n.read && (

@@ -1,6 +1,6 @@
 // 看板视图 - 基于 dnd-kit 的拖拽看板
 
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import {
   DndContext,
   type DragEndEvent,
@@ -15,18 +15,12 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, MessageSquare, Plus } from 'lucide-react'
-import { Avatar, PriorityBadge, LabelTag, Button } from '@/components/ui'
+import { GripVertical, Plus } from 'lucide-react'
+import { Avatar, PriorityBadge, LabelTag } from '@/components/ui'
 import { dueLabel } from '@/lib/date'
 import { cn } from '@/lib/utils'
+import { STATUS_COLUMNS } from '@/lib/constants'
 import type { Task, TaskStatus } from '../../shared/types'
-
-const columns: { status: TaskStatus; label: string; dot: string }[] = [
-  { status: 'todo', label: '待办', dot: 'bg-slate-400' },
-  { status: 'in_progress', label: '进行中', dot: 'bg-warn' },
-  { status: 'review', label: '审核中', dot: 'bg-sky-400' },
-  { status: 'done', label: '已完成', dot: 'bg-ok' },
-]
 
 interface Props {
   tasks: Task[]
@@ -45,20 +39,20 @@ export default function KanbanBoard({ tasks, users, onMove, onClickTask, onAddTa
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
 
-  function handleEnd(e: DragEndEvent) {
+  const handleEnd = useCallback((e: DragEndEvent) => {
     const taskId = e.active.id as string
     const target = e.over?.data.current?.status as TaskStatus | undefined
     if (target) onMove(taskId, target)
-  }
+  }, [onMove])
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      {columns.map((col) => (
+    <div className="no-select grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {STATUS_COLUMNS.map((col) => (
         <div key={col.status} className="flex flex-col rounded-2xl border border-bg-border bg-bg-panel/40">
           <div className="flex items-center justify-between px-4 py-3">
             <div className="flex items-center gap-2">
               <span className={cn('h-2 w-2 rounded-full', col.dot)} />
-              <h3 className="font-display text-sm text-slate-100">{col.label}</h3>
+              <h3 className="font-display text-sm text-text-primary">{col.label}</h3>
               <span className="rounded-full bg-bg-soft px-1.5 text-xs text-muted">
                 {grouped[col.status].length}
               </span>
@@ -129,7 +123,7 @@ function SortableCard({
     >
       <div className="mb-2 flex items-start gap-2">
         <GripVertical className="mt-0.5 h-4 w-4 shrink-0 cursor-grab text-muted/60 group-hover:text-muted" />
-        <p className="flex-1 text-sm font-medium leading-snug text-slate-100">{task.title}</p>
+        <p className="flex-1 text-sm font-medium leading-snug text-text-primary">{task.title}</p>
       </div>
 
       {task.labels.length > 0 && (
@@ -149,7 +143,7 @@ function SortableCard({
               due.tone === 'overdue' && 'text-danger',
               due.tone === 'soon' && 'text-warn',
               due.tone === 'none' && 'text-muted',
-              due.tone === 'normal' && 'text-slate-400',
+              due.tone === 'normal' && 'text-muted',
             )}
           >
             {due.text}

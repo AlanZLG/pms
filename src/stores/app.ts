@@ -8,13 +8,13 @@ interface AppState {
   user: User | null
   loading: boolean
   initialized: boolean
-  toast: { id: number; type: 'success' | 'error' | 'info'; message: string } | null
+  toast: { id: number; type: 'success' | 'error' | 'info'; message: string; onUndo?: () => void; undoLabel?: string } | null
   init: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   register: (name: string, email: string, password: string) => Promise<void>
   logout: () => void
   setUser: (u: User | null) => void
-  notify: (type: 'success' | 'error' | 'info', message: string) => void
+  notify: (type: 'success' | 'error' | 'info', message: string, opts?: { onUndo?: () => void; undoLabel?: string; duration?: number }) => void
   dismissToast: () => void
 }
 
@@ -74,11 +74,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setUser: (u) => set({ user: u }),
 
-  notify: (type, message) => {
-    set({ toast: { id: toastSeq++, type, message } })
+  notify: (type, message, opts) => {
+    const id = toastSeq++
+    const duration = opts?.duration ?? (opts?.onUndo ? 5000 : 3000)
+    set({ toast: { id, type, message, onUndo: opts?.onUndo, undoLabel: opts?.undoLabel } })
     setTimeout(() => {
-      if (get().toast?.id === toastSeq - 1) set({ toast: null })
-    }, 3000)
+      if (get().toast?.id === id) set({ toast: null })
+    }, duration)
   },
   dismissToast: () => set({ toast: null }),
 }))

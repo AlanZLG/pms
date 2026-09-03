@@ -31,7 +31,7 @@ router.post('/tasks/:taskId', upload.single('file'), (req: AuthRequest, res: Res
   try {
     const task = taskRepo.findById(req.params.taskId)
     if (!task) throw new ApiError(404, '任务不存在')
-    const file = (req as any).file
+    const file = (req as AuthRequest & { file?: Express.Multer.File }).file
     if (!file) throw new ApiError(400, '请选择文件')
 
     const attachment = attachmentRepo.create({

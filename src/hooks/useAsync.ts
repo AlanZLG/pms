@@ -1,9 +1,11 @@
 // 异步数据获取辅助 hook
 
 import { useEffect, useState, useCallback } from 'react'
+import { getErrorMessage } from '@/lib/errors'
 
 export function useAsync<T>(
   fn: () => Promise<T>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   deps: any[] = [],
 ): {
   data: T | null
@@ -21,8 +23,8 @@ export function useAsync<T>(
     try {
       const result = await fn()
       setData(result)
-    } catch (e: any) {
-      setError(e?.message || '加载失败')
+    } catch (e) {
+      setError(getErrorMessage(e, '加载失败'))
     } finally {
       setLoading(false)
     }

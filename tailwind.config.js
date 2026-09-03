@@ -8,21 +8,25 @@ export default {
     extend: {
       colors: {
         bg: {
-          DEFAULT: '#0F172A',
-          soft: '#131C31',
-          panel: '#16203A',
-          elev: '#1B2742',
-          border: '#243054',
+          DEFAULT: 'rgb(var(--color-bg) / <alpha-value>)',
+          soft: 'rgb(var(--color-bg-soft) / <alpha-value>)',
+          panel: 'rgb(var(--color-bg-panel) / <alpha-value>)',
+          elev: 'rgb(var(--color-bg-elev) / <alpha-value>)',
+          border: 'rgb(var(--color-bg-border) / <alpha-value>)',
         },
         brand: {
-          DEFAULT: '#6366F1',
-          soft: '#818CF8',
-          deep: '#4F46E5',
+          DEFAULT: 'rgb(var(--color-brand) / <alpha-value>)',
+          soft: 'rgb(var(--color-brand-soft) / <alpha-value>)',
+          deep: 'rgb(var(--color-brand-deep) / <alpha-value>)',
         },
-        ok: '#10B981',
-        warn: '#F59E0B',
-        danger: '#EF4444',
-        muted: '#94A3B8',
+        ok: 'rgb(var(--color-ok) / <alpha-value>)',
+        warn: 'rgb(var(--color-warn) / <alpha-value>)',
+        danger: 'rgb(var(--color-danger) / <alpha-value>)',
+        muted: 'rgb(var(--color-muted) / <alpha-value>)',
+      },
+      textColor: {
+        primary: 'rgb(var(--color-text-primary) / <alpha-value>)',
+        secondary: 'rgb(var(--color-text-secondary) / <alpha-value>)',
       },
       fontFamily: {
         display: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'],

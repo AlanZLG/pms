@@ -6,7 +6,6 @@
   font-family: "Space Grotesk", system-ui, -apple-system, BlinkMacSystemFont,
     "Segoe UI", sans-serif;
   line-height: 1.5;
-  color-scheme: dark;
 }
 
 html,
@@ -17,24 +16,84 @@ body,
 
 body {
   margin: 0;
-  background-color: #0f172a;
-  color: #e2e8f0;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ========== Dark Theme (default) ========== */
+html.dark,
+html:not(.light) {
+  color-scheme: dark;
+  --color-bg: 15 23 42;
+  --color-bg-soft: 19 28 49;
+  --color-bg-panel: 22 32 58;
+  --color-bg-elev: 27 39 66;
+  --color-bg-border: 36 48 84;
+
+  --color-brand: 99 102 241;
+  --color-brand-soft: 129 140 248;
+  --color-brand-deep: 79 70 229;
+
+  --color-ok: 16 185 129;
+  --color-warn: 245 158 11;
+  --color-danger: 239 68 68;
+  --color-muted: 148 163 184;
+
+  --color-text-primary: 226 232 240;
+  --color-text-secondary: 148 163 184;
+
+  --app-bg: #0f172a;
+}
+
+/* ========== Light Theme ========== */
+html.light {
+  color-scheme: light;
+  --color-bg: 248 250 252;
+  --color-bg-soft: 241 245 249;
+  --color-bg-panel: 255 255 255;
+  --color-bg-elev: 255 255 255;
+  --color-bg-border: 226 232 240;
+
+  --color-brand: 99 102 241;
+  --color-brand-soft: 129 140 248;
+  --color-brand-deep: 79 70 229;
+
+  --color-ok: 16 185 129;
+  --color-warn: 245 158 11;
+  --color-danger: 239 68 68;
+  --color-muted: 100 116 139;
+
+  --color-text-primary: 15 23 42;
+  --color-text-secondary: 100 116 139;
+
+  --app-bg: #f1f5f9;
+}
+
+body {
+  background-color: var(--app-bg);
+  color: rgb(var(--color-text-primary));
+}
+
 /* 背景氛围层 */
 .app-bg {
   position: relative;
-  background-color: #0f172a;
+  background-color: var(--app-bg);
   background-image:
     radial-gradient(900px 500px at 12% -10%, rgba(99, 102, 241, 0.18), transparent 60%),
     radial-gradient(700px 500px at 110% 0%, rgba(6, 182, 212, 0.12), transparent 55%),
-    linear-gradient(to right, rgba(148, 163, 184, 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+    linear-gradient(to right, rgb(var(--color-bg-border) / 0.5) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(var(--color-bg-border) / 0.5) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 56px 56px, 56px 56px;
+}
+
+html.light .app-bg {
+  background-image:
+    radial-gradient(900px 500px at 12% -10%, rgba(99, 102, 241, 0.12), transparent 60%),
+    radial-gradient(700px 500px at 110% 0%, rgba(6, 182, 212, 0.08), transparent 55%),
+    linear-gradient(to right, rgb(var(--color-bg-border) / 0.6) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(var(--color-bg-border) / 0.6) 1px, transparent 1px);
 }
 
 ::-webkit-scrollbar {
@@ -45,13 +104,13 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.22);
+  background: rgb(var(--color-muted) / 0.25);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgb(var(--color-muted) / 0.45);
   background-clip: padding-box;
 }
 
@@ -71,8 +130,32 @@ body {
 
 /* 玻璃拟态 */
 .glass {
-  background: rgba(22, 32, 58, 0.6);
+  background: rgb(var(--color-bg-panel) / 0.6);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border: 1px solid rgba(36, 48, 84, 0.7);
+  border: 1px solid rgb(var(--color-bg-border) / 0.7);
+}
+
+/* 移动端触摸优化 */
+@media (max-width: 768px) {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    overscroll-behavior-y: contain;
+  }
+  /* 按钮/卡片最小点击热区 44px */
+  .btn-min-touch { min-height: 44px; min-width: 44px; }
+  /* 防止输入框聚焦时页面放大 iOS */
+  input[type="text"], input[type="password"], input[type="email"], input[type="search"],
+  input[type="number"], input[type="date"], input[type="datetime-local"], select, textarea {
+    font-size: 16px !important;
+  }
+}
+/* 防止长按选中（拖拽区域） */
+.no-select, .no-select * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
 }

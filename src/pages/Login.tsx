@@ -5,12 +5,13 @@ import { useNavigate, Link } from 'react-router-dom'
 import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight, CheckCircle2 } from 'lucide-react'
 import { useAppStore } from '@/stores/app'
 import { Button, Input } from '@/components/ui'
+import { getErrorMessage } from '@/lib/errors'
 import { cn } from '@/lib/utils'
 
 export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' }) {
   const [m, setM] = useState<'login' | 'register'>(mode)
-  const [email, setEmail] = useState('admin@pm.dev')
-  const [password, setPassword] = useState('123456')
+  const [email, setEmail] = useState('leigang@creat-value.com')
+  const [password, setPassword] = useState('12345')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const login = useAppStore((s) => s.login)
@@ -30,8 +31,8 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
       }
       notify('success', m === 'login' ? '登录成功' : '注册成功')
       navigate('/')
-    } catch (err: any) {
-      setError(err?.message || '操作失败')
+    } catch (e) {
+      setError(getErrorMessage(e, '操作失败'))
     }
   }
 
@@ -42,28 +43,28 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
         <div className="absolute -left-24 -top-24 h-96 w-96 rounded-full bg-brand/30 blur-3xl" />
         <div className="absolute bottom-0 right-0 h-80 w-80 rounded-full bg-cyan-500/20 blur-3xl" />
         <div className="relative z-10 flex items-center gap-3">
-          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-grad text-white shadow-glow">
+          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-grad text-text-primary shadow-glow">
             <Sparkles className="h-6 w-6" />
           </div>
           <div>
-            <p className="font-display text-2xl text-white">Atlas</p>
+            <p className="font-display text-2xl text-text-primary">Fortune</p>
             <p className="text-sm text-muted">让每一次推进,都被看见</p>
           </div>
         </div>
 
         <div className="relative z-10 max-w-md animate-fade-up">
-          <h1 className="font-display text-5xl font-semibold leading-tight text-white">
+          <h1 className="font-display text-5xl font-semibold leading-tight text-text-primary">
             看板流转之间,
             <br />
             <span className="bg-gradient-to-r from-brand via-brand-soft to-cyan-300 bg-clip-text text-transparent">
               团队节奏尽在掌握
             </span>
           </h1>
-          <p className="mt-5 text-base leading-relaxed text-slate-300">
-            从看板到燃尽图,从权限到协作 —— Atlas
+          <p className="mt-5 text-base leading-relaxed text-text-secondary">
+            从看板到燃尽图,从权限到协作 —— Fortune
             将项目交付链路上每一个关键节点浓缩为一张清晰可感的视图。
           </p>
-          <ul className="mt-8 space-y-3 text-sm text-slate-200">
+          <ul className="mt-8 space-y-3 text-sm text-text-secondary">
             {['拖拽式看板,实时同步状态', '燃尽图与工作量统计', '精细的成员角色与权限'].map((t) => (
               <li key={t} className="flex items-center gap-2">
                 <CheckCircle2 className="h-4 w-4 text-ok" /> {t}
@@ -73,7 +74,7 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
         </div>
 
         <div className="relative z-10 font-mono text-xs text-muted">
-          v1.0 · 演示账号 admin@pm.dev / 123456
+          v1.0 · 演示账号 leigang@creat-value.com / 12345
         </div>
       </div>
 
@@ -81,10 +82,10 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
       <div className="flex items-center justify-center p-6 md:p-10">
         <div className="glass w-full max-w-md rounded-3xl p-8 shadow-glow animate-pop-in">
           <div className="mb-6 flex items-center gap-2 lg:hidden">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-grad text-white">
+            <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-grad text-text-primary">
               <Sparkles className="h-5 w-5" />
             </div>
-            <p className="font-display text-xl text-white">Atlas 项目管理</p>
+            <p className="font-display text-xl text-text-primary">Fortune 项目管理</p>
           </div>
 
           <div className="mb-6 flex rounded-xl bg-bg-soft p-1">
@@ -94,7 +95,7 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
                 onClick={() => setM(tab)}
                 className={cn(
                   'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition',
-                  m === tab ? 'bg-brand text-white shadow-glow' : 'text-muted hover:text-slate-200',
+                  m === tab ? 'bg-brand text-text-primary shadow-glow' : 'text-muted hover:text-text-secondary',
                 )}
               >
                 {tab === 'login' ? '登 录' : '注 册'}
@@ -134,7 +135,7 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
 
             {error && <p className="text-sm text-danger">{error}</p>}
 
-            <Button type="submit" disabled={loading} className="w-full">
+            <Button type="submit" disabled={loading} className="w-full min-h-[44px]">
               {m === 'login' ? '登录系统' : '创建账号'}
               <ArrowRight className="h-4 w-4" />
             </Button>

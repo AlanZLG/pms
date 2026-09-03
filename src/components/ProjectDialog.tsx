@@ -1,12 +1,12 @@
 // 创建/编辑项目的对话框
 
-import { useState, type ReactNode, useEffect, useCallback } from 'react'
-import { X, User } from 'lucide-react'
+import { useState, type ReactNode, useEffect } from 'react'
+import { X, User, Layers } from 'lucide-react'
 import { Button, Input, Textarea } from '@/components/ui'
-import { cn } from '@/lib/utils'
+import { cn, sortUsers } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useAppStore } from '@/stores/app'
-import type { ProjectStatus, User as UserType } from '../../shared/types'
+import type { ProjectStatus, User as UserType, ProjectTemplate } from '../../shared/types'
 
 interface Props {
   open: boolean
@@ -17,6 +17,7 @@ interface Props {
     status: ProjectStatus
     dueDate: string | null
     ownerId?: string
+    templateId?: string
   }) => Promise<void>
   title?: string
   defaultValues?: Partial<{ name: string; description: string; status: ProjectStatus; dueDate: string; ownerId: string }>
@@ -41,13 +42,16 @@ export default function ProjectDialog({
   const [status, setStatus] = useState<ProjectStatus>(defaultValues?.status || 'planning')
   const [dueDate, setDueDate] = useState(defaultValues?.dueDate?.slice(0, 10) || '')
   const [ownerId, setOwnerId] = useState(defaultValues?.ownerId || '')
+  const [templateId, setTemplateId] = useState('')
   const [loading, setLoading] = useState(false)
   const [users, setUsers] = useState<UserType[]>([])
+  const [templates, setTemplates] = useState<(ProjectTemplate & { taskCount: number; budgetCount: number; kanbanColumnCount: number })[]>([])
   const currentUser = useAppStore((s) => s.user)
 
   useEffect(() => {
     if (open) {
-      api.listUsers().then((r) => setUsers(r.users || [])).catch(() => {})
+      api.listUsers().then((r) => setUsers(sortUsers(r.users || []))).catch(() => {})
+      api.listProjectTemplates().then((r) => setTemplates(r.templates || [])).catch(() => {})
     }
   }, [open])
 
@@ -58,6 +62,7 @@ export default function ProjectDialog({
       setStatus(defaultValues?.status || 'planning')
       setDueDate(defaultValues?.dueDate?.slice(0, 10) || '')
       setOwnerId(defaultValues?.ownerId || '')
+      setTemplateId('')
     }
   }, [open, defaultValues])
 
@@ -71,6 +76,7 @@ export default function ProjectDialog({
   }, [open, onClose])
 
   const isAdmin = currentUser?.role === 'admin'
+  const selectedTemplate = templates.find(t => t.id === templateId)
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -82,6 +88,7 @@ export default function ProjectDialog({
         status,
         dueDate: dueDate ? new Date(dueDate).toISOString() : null,
         ownerId: isAdmin && ownerId ? ownerId : undefined,
+        templateId: templateId || undefined,
       })
       onClose()
     } finally {
@@ -96,15 +103,15 @@ export default function ProjectDialog({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="glass relative w-full max-w-md rounded-2xl p-6 animate-pop-in">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="font-display text-xl text-white">{title}</h2>
-          <button onClick={onClose} className="text-muted hover:text-slate-200">
+          <h2 className="font-display text-xl text-text-primary">{title}</h2>
+          <button onClick={onClose} className="text-muted hover:text-text-secondary">
             <X className="h-5 w-5" />
           </button>
         </div>
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-xs text-muted">项目名称</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="如:Atlas 后台重构" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} required placeholder="如:Fortune 后台重构" />
           </div>
           <div>
             <label className="mb-1.5 block text-xs text-muted">描述</label>
@@ -121,7 +128,7 @@ export default function ProjectDialog({
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value as ProjectStatus)}
-                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand"
+                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
               >
                 {statusOptions.map((o) => (
                   <option key={o.value} value={o.value}>
@@ -135,6 +142,33 @@ export default function ProjectDialog({
               <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </div>
           </div>
+          <div>
+            <label className="mb-1.5 flex items-center gap-1.5 text-xs text-muted">
+              <Layers className="h-3 w-3" /> 项目模板（可选）
+            </label>
+            <select
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
+              className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
+            >
+              <option value="">不使用模板</option>
+              {templates.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.taskCount}个任务, {t.budgetCount}个预算类别)
+                </option>
+              ))}
+            </select>
+            {selectedTemplate && (
+              <div className="mt-2 rounded-lg bg-bg-soft p-2 text-xs text-muted">
+                <p className="font-medium text-text-secondary">{selectedTemplate.description || '暂无描述'}</p>
+                <div className="mt-1 flex gap-3">
+                  <span>任务: {selectedTemplate.taskCount}</span>
+                  <span>预算类别: {selectedTemplate.budgetCount}</span>
+                  <span>看板列: {selectedTemplate.kanbanColumnCount}</span>
+                </div>
+              </div>
+            )}
+          </div>
           {isAdmin && (
             <div>
               <label className="mb-1.5 flex items-center gap-1.5 text-xs text-muted">
@@ -143,7 +177,7 @@ export default function ProjectDialog({
               <select
                 value={ownerId}
                 onChange={(e) => setOwnerId(e.target.value)}
-                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand"
+                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
               >
                 <option value="">默认(创建者)</option>
                 {users.map((u) => (
@@ -172,7 +206,7 @@ export default function ProjectDialog({
 // 共享:状态徽章
 export function ProjectStatusBadge({ status }: { status: ProjectStatus }) {
   const map: Record<ProjectStatus, { cls: string; label: string }> = {
-    planning: { cls: 'bg-slate-500/15 text-slate-300', label: '规划中' },
+    planning: { cls: 'bg-bg-soft text-text-secondary', label: '规划中' },
     active: { cls: 'bg-brand/15 text-brand-soft', label: '进行中' },
     completed: { cls: 'bg-ok/15 text-ok', label: '已完成' },
     archived: { cls: 'bg-muted/15 text-muted', label: '已归档' },
@@ -205,8 +239,8 @@ export function Modal({
       <div className={cn('glass relative w-full rounded-2xl p-6 animate-pop-in', wide ? 'max-w-2xl' : 'max-w-md')}>
         {title && (
           <div className="mb-4 flex items-center justify-between">
-            <div className="font-display text-xl text-white">{title}</div>
-            <button onClick={onClose} className="text-muted hover:text-slate-200">
+            <div className="font-display text-xl text-text-primary">{title}</div>
+            <button onClick={onClose} className="text-muted hover:text-text-secondary">
               <X className="h-5 w-5" />
             </button>
           </div>

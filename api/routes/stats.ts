@@ -1,10 +1,9 @@
 // 统计路由
 
-import { Router, type Request, type Response, type NextFunction } from 'express'
+import { Router, type Response, type NextFunction } from 'express'
 import { projectRepo, taskRepo, userRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
-import { ApiError } from '../lib/utils.ts'
-import type { WorkloadItem } from '../../shared/types.ts'
+import type { User, WorkloadItem } from '../../shared/types.ts'
 
 const router = Router()
 router.use(authRequired)
@@ -46,6 +45,21 @@ router.get('/burndown', (req: AuthRequest, res: Response, next: NextFunction) =>
 router.get('/workload', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const users = userRepo.findAll()
+    
+    const getSortOrder = (u: User) => {
+      if (u.role === 'admin') return 0
+      if (u.role === 'finance') return 1
+      if (!u.isOutsourced) return 3
+      return 4
+    }
+    
+    users.sort((a, b) => {
+      const orderA = getSortOrder(a)
+      const orderB = getSortOrder(b)
+      if (orderA !== orderB) return orderA - orderB
+      return a.name.localeCompare(b.name)
+    })
+    
     const items: WorkloadItem[] = users.map((u) => {
       const all = taskRepo.findByAssigneeAll(u.id)
       return {

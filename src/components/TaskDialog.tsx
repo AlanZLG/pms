@@ -5,8 +5,10 @@ import { Modal } from '@/components/ProjectDialog'
 import { Button, Input, Textarea } from '@/components/ui'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
+import { getErrorMessage } from '@/lib/errors'
 import { useAppStore } from '@/stores/app'
 import { Sparkles, Save, Trash2, X } from 'lucide-react'
+import { sortUsers } from '@/lib/utils'
 import type { Task, TaskPriority, TaskStatus, Template } from '../../shared/types'
 
 interface Props {
@@ -16,6 +18,8 @@ interface Props {
   task?: Task | null
   defaultStatus?: TaskStatus
   onSaved: () => void
+  initialStartDate?: string
+  initialDueDate?: string
 }
 
 const priorities: { value: TaskPriority; label: string }[] = [
@@ -31,10 +35,10 @@ const statuses: { value: TaskStatus; label: string }[] = [
   { value: 'done', label: '已完成' },
 ]
 
-export default function TaskDialog({ open, onClose, projectId, task, defaultStatus, onSaved }: Props) {
+export default function TaskDialog({ open, onClose, projectId, task, defaultStatus, onSaved, initialStartDate, initialDueDate }: Props) {
   const users = useAsync(() => api.listUsers(), [projectId])
   const templatesData = useAsync(() => api.listTemplates(), [])
-  const members = users.data?.users || []
+  const members = sortUsers(users.data?.users || [])
   const templates: Template[] = templatesData.data?.templates || []
   const notify = useAppStore((s) => s.notify)
 
@@ -44,7 +48,9 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
   const [priority, setPriority] = useState<TaskPriority>('medium')
   const [assigneeId, setAssigneeId] = useState<string | null>(null)
   const [labels, setLabels] = useState<string>('')
+  const [startDate, setStartDate] = useState('')
   const [dueDate, setDueDate] = useState('')
+  const [plannedHours, setPlannedHours] = useState<string>('')
   const [loading, setLoading] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('')
   const [showSaveTemplate, setShowSaveTemplate] = useState(false)
@@ -59,12 +65,14 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
       setPriority(task?.priority || 'medium')
       setAssigneeId(task?.assigneeId || null)
       setLabels(task?.labels.join(', ') || '')
-      setDueDate(task?.dueDate?.slice(0, 10) || '')
+      setStartDate(task?.startDate?.slice(0, 10) || initialStartDate?.slice(0, 10) || '')
+      setDueDate(task?.dueDate?.slice(0, 10) || initialDueDate?.slice(0, 10) || '')
+      setPlannedHours(task?.plannedHours?.toString() || '')
       setSelectedTemplateId('')
       setShowSaveTemplate(false)
       setTemplateName('')
     }
-  }, [open, task, defaultStatus])
+  }, [open, task, defaultStatus, initialStartDate, initialDueDate])
 
   function applyTemplate(tplId: string) {
     setSelectedTemplateId(tplId)
@@ -93,8 +101,8 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
       setShowSaveTemplate(false)
       setTemplateName('')
       templatesData.reload()
-    } catch (e: any) {
-      notify('error', e?.message || '保存模板失败')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '保存模板失败'))
     } finally {
       setTemplateBusy(false)
     }
@@ -107,17 +115,21 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
       notify('success', '模板已删除')
       if (selectedTemplateId === tplId) setSelectedTemplateId('')
       templatesData.reload()
-    } catch (e: any) {
-      notify('error', e?.message || '删除模板失败')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '删除模板失败'))
     }
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    const trimmedTitle = title.trim()
+    if (!trimmedTitle) return
+    if (trimmedTitle.length > 120) return
+    if (startDate && dueDate && new Date(startDate) > new Date(dueDate)) return
     setLoading(true)
     try {
       const payload = {
-        title,
+        title: trimmedTitle,
         description,
         status,
         priority,
@@ -126,7 +138,9 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
           .split(/[,，]/)
           .map((s) => s.trim())
           .filter(Boolean),
+        startDate: startDate ? new Date(startDate).toISOString() : null,
         dueDate: dueDate ? new Date(dueDate).toISOString() : null,
+        plannedHours: plannedHours ? parseFloat(plannedHours) : null,
       }
       if (task) {
         await api.updateTask(task.id, payload)
@@ -154,7 +168,7 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
               <select
                 value={selectedTemplateId}
                 onChange={(e) => applyTemplate(e.target.value)}
-                className="flex-1 rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand"
+                className="flex-1 rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
                 defaultValue=""
               >
                 <option value="">选择模板…</option>
@@ -180,7 +194,13 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
 
         <div>
           <label className="mb-1.5 block text-xs text-muted">任务标题</label>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} required placeholder="简明扼要" />
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} required placeholder="简明扼要" className={title.trim().length > 120 ? 'border-red-500' : ''} />
+          {title.trim().length > 120 && (
+            <p className="mt-1 text-xs text-red-400">标题过长 ({title.trim().length}/120)</p>
+          )}
+          {title.trim().length === 0 && (
+            <p className="mt-1 text-xs text-muted">标题必填</p>
+          )}
         </div>
         <div>
           <label className="mb-1.5 block text-xs text-muted">描述</label>
@@ -191,7 +211,7 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
             placeholder="更详细的说明"
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <div>
             <label className="mb-1.5 block text-xs text-muted">状态</label>
             <SelectBox value={status} onChange={(v) => setStatus(v as TaskStatus)} options={statuses} />
@@ -205,7 +225,7 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
             <select
               value={assigneeId || ''}
               onChange={(e) => setAssigneeId(e.target.value || null)}
-              className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand"
+              className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
             >
               <option value="">未指派</option>
               {members.map((u) => (
@@ -216,8 +236,26 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
             </select>
           </div>
           <div>
+            <label className="mb-1.5 block text-xs text-muted">开始日期</label>
+            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+          </div>
+          <div>
             <label className="mb-1.5 block text-xs text-muted">截止日期</label>
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            {startDate && dueDate && new Date(startDate) > new Date(dueDate) && (
+              <p className="mt-1 text-xs text-red-400">截止日期不能早于开始日期</p>
+            )}
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs text-muted">计划工时(小时)</label>
+            <Input
+              type="number"
+              value={plannedHours}
+              onChange={(e) => setPlannedHours(e.target.value)}
+              placeholder="0"
+              min="0"
+              step="0.5"
+            />
           </div>
         </div>
         <div>
@@ -282,7 +320,7 @@ function SelectBox({
     <select
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand"
+      className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
     >
       {options.map((o) => (
         <option key={o.value} value={o.value}>

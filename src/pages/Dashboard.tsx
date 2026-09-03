@@ -1,5 +1,3 @@
-// 仪表板首页
-
 import { Link } from 'react-router-dom'
 import {
   FolderKanban,
@@ -9,39 +7,42 @@ import {
   ListTodo,
   ArrowRight,
   TrendingUp,
+  Clock,
+  Users2,
+  Calendar,
 } from 'lucide-react'
 import {
   PieChart, Pie, Cell, ResponsiveContainer,
   AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
 } from 'recharts'
-import { useAsync } from '@/hooks/useAsync'
-import { api, getToken } from '@/lib/api'
-import { Card, Skeleton, EmptyState, Avatar, PriorityBadge, StatusBadge } from '@/components/ui'
+import { useSwr } from '@/lib/cache'
+import { api } from '@/lib/api'
+import { Card, Skeleton as UiSkeleton, EmptyState, PriorityBadge, StatusBadge } from '@/components/ui'
+import { StatSkeleton, CardSkeleton, Skeleton } from '@/components/Skeleton'
 import { useAppStore } from '@/stores/app'
 import { dueLabel } from '@/lib/date'
 import { cn } from '@/lib/utils'
-import type { Task, StatsOverview, BurndownData } from '../../shared/types'
+import type { Task, StatsOverview, BurndownData, Project } from '../../shared/types'
+import { STATUS_COLORS_HEX, PROJECT_STATUS_META } from '@/lib/constants'
+import { useMemo } from 'react'
 
-const statusColors: Record<string, string> = {
-  todo: '#94A3B8',
-  in_progress: '#F59E0B',
-  review: '#38BDF8',
-  done: '#10B981',
+const PROJECT_STATUS_ORDER: Record<string, number> = { active: 0, planning: 1, completed: 2, archived: 3 }
+
+const STAT_CARD_TONES: Record<string, string> = {
+  brand: 'from-brand/20 to-brand/5 text-brand-soft',
+  sky: 'from-sky-500/20 to-sky-500/5 text-sky-300',
+  ok: 'from-emerald-500/20 to-emerald-500/5 text-ok',
+  warn: 'from-amber-500/20 to-amber-500/5 text-warn',
 }
 
 export default function Dashboard() {
   const user = useAppStore((s) => s.user)
   const userId = user?.id || ''
-  const overview = useAsync<StatsOverview>(() => api.overview(), [])
-  const burndown = useAsync<BurndownData>(() => api.burndown(''), [])
-  const tasks = useAsync<Task[]>(async () => {
+  const overview = useSwr<StatsOverview>('overview', () => api.overview())
+  const burndown = useSwr<BurndownData>('burndown:all', () => api.burndown(''))
+  const projects = useSwr<{ projects: Project[] }>('projects:list', () => api.listProjects())
+  const tasks = useSwr<Task[]>(userId ? `tasks:user:${userId}` : null, async () => {
     if (!userId) return []
-    const { listUsers } = api
-    const { users } = await listUsers()
-    const mine = users.find((u) => u.id === userId)
-    if (!mine) return []
-    // 这里通过 listTasks 需要项目 id,直接用全部项目里我的任务有点麻烦,
-    // 简化:拉取所有项目,再拉每个项目的任务;取属于我的未完成任务
     const { projects } = await api.listProjects()
     const all: Task[] = []
     await Promise.all(
@@ -51,7 +52,7 @@ export default function Dashboard() {
       }),
     )
     return all.filter((t) => t.assigneeId === userId && t.status !== 'done')
-  }, [userId])
+  })
 
   const trend = overview.data?.trend || []
   const totalTasks =
@@ -60,12 +61,54 @@ export default function Dashboard() {
     overview.data?.tasksByStatus.review +
     overview.data?.tasksByStatus.done || 0
 
+  const projectList = projects.data?.projects || []
+  const sortedProjects = useMemo(() => {
+    return [...projectList].sort((a, b) => {
+      return PROJECT_STATUS_ORDER[a.status] - PROJECT_STATUS_ORDER[b.status]
+    })
+  }, [projectList])
+
+  const pieChartData = useMemo(() => pieData(overview.data), [overview.data])
+
+  const isInitialLoading = overview.loading && burndown.loading && projects.loading && tasks.loading
+
+  if (isInitialLoading) {
+    return (
+      <div className="space-y-6 animate-fade-up">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <Skeleton width={180} height={36} className="mb-2" />
+            <Skeleton width={240} height={16} />
+          </div>
+          <Skeleton width={110} height={38} rounded="lg" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+          <StatSkeleton />
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <CardSkeleton rows={5} className="lg:col-span-1" />
+          <CardSkeleton rows={6} className="lg:col-span-2" />
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <CardSkeleton rows={4} />
+          <CardSkeleton rows={4} />
+          <CardSkeleton rows={4} />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6 animate-fade-up">
-      {/* 顶部欢迎区 */}
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="font-display text-3xl text-white">你好,{user?.name?.split('')[0]} 👋</p>
+          <p className="font-display text-3xl text-text-primary">你好,{user?.name?.split('')[0]} 👋</p>
           <p className="mt-1 text-sm text-muted">今天有 {tasks.data?.length || 0} 个任务待你推进。</p>
         </div>
         <Link
@@ -76,7 +119,6 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      {/* 概览卡片 */}
       <div className="grid grid-cols-2 gap-4 animate-stagger lg:grid-cols-4">
         <StatCard
           title="进行中项目"
@@ -105,45 +147,44 @@ export default function Dashboard() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* 任务状态分布 */}
         <Card className="p-5 lg:col-span-1">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 font-display text-lg text-slate-100">
+            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
               <Activity className="h-5 w-5 text-brand-soft" /> 任务状态分布
             </h3>
           </div>
           {overview.loading ? (
-            <Skeleton className="h-56" />
+            <UiSkeleton className="h-56" />
           ) : (
             <div className="flex flex-col items-center">
               <div className="relative h-48 w-48">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
                     <Pie
-                      data={pieData(overview.data)}
+                      data={pieChartData}
                       dataKey="value"
                       innerRadius={56}
                       outerRadius={80}
                       paddingAngle={3}
                       strokeWidth={0}
                     >
-                      {pieData(overview.data).map((entry) => (
-                        <Cell key={entry.name} fill={statusColors[entry.name]} />
+                      {pieChartData.map((entry) => (
+                        <Cell key={entry.name} fill={STATUS_COLORS_HEX[entry.name as keyof typeof STATUS_COLORS_HEX]} />
                       ))}
                     </Pie>
                   </PieChart>
                 </ResponsiveContainer>
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="font-mono text-3xl font-semibold text-white">{totalTasks}</span>
+                  <span className="font-mono text-3xl font-semibold text-text-primary">{totalTasks}</span>
                   <span className="text-xs text-muted">任务总数</span>
                 </div>
               </div>
               <div className="mt-4 grid w-full grid-cols-2 gap-2 text-xs">
-                {pieData(overview.data).map((d) => (
+                {pieChartData.map((d) => (
                   <div key={d.name} className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full" style={{ background: statusColors[d.name] }} />
+                    <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLORS_HEX[d.name as keyof typeof STATUS_COLORS_HEX] }} />
                     <span className="text-muted">{statusLabel(d.name)}</span>
-                    <span className="ml-auto font-mono text-slate-200">{d.value}</span>
+                    <span className="ml-auto font-mono text-text-secondary">{d.value}</span>
                   </div>
                 ))}
               </div>
@@ -151,15 +192,14 @@ export default function Dashboard() {
           )}
         </Card>
 
-        {/* 近 14 天趋势 */}
         <Card className="p-5 lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 font-display text-lg text-slate-100">
+            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
               <TrendingUp className="h-5 w-5 text-brand-soft" /> 14 天任务趋势
             </h3>
           </div>
           {overview.loading ? (
-            <Skeleton className="h-56" />
+            <UiSkeleton className="h-56" />
           ) : trend.length === 0 ? (
             <EmptyState title="暂无数据" />
           ) : (
@@ -197,10 +237,35 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* 我的今日任务 */}
       <Card className="p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-display text-lg text-slate-100">我的待办任务</h3>
+          <h3 className="font-display text-lg text-text-primary flex items-center gap-2">
+            <Clock className="h-5 w-5 text-brand-soft" /> 项目进度一览
+          </h3>
+          <Link to="/projects" className="text-xs text-brand-soft hover:underline">
+            查看全部项目
+          </Link>
+        </div>
+        {projects.loading ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <UiSkeleton key={i} className="h-36" />
+            ))}
+          </div>
+        ) : projectList.length > 0 ? (
+          <div className="grid gap-4 animate-stagger sm:grid-cols-2 lg:grid-cols-3">
+            {sortedProjects.map((project) => (
+              <ProjectProgressCard key={project.id} project={project} />
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="暂无项目" hint="创建一个新项目开始吧" />
+        )}
+      </Card>
+
+      <Card className="p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-display text-lg text-text-primary">我的待办任务</h3>
           <Link to="/projects" className="text-xs text-brand-soft hover:underline">
             查看全部
           </Link>
@@ -208,7 +273,7 @@ export default function Dashboard() {
         {tasks.loading ? (
           <div className="space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-14" />
+              <UiSkeleton key={i} className="h-14" />
             ))}
           </div>
         ) : tasks.data && tasks.data.length > 0 ? (
@@ -222,7 +287,7 @@ export default function Dashboard() {
                   className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
                 >
                   <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
-                  <span className="flex-1 truncate text-sm text-slate-100">{t.title}</span>
+                  <span className="flex-1 truncate text-sm text-text-primary">{t.title}</span>
                   <PriorityBadge priority={t.priority} />
                   <StatusBadge status={t.status} />
                   <span
@@ -231,7 +296,7 @@ export default function Dashboard() {
                       due.tone === 'overdue' && 'text-danger',
                       due.tone === 'soon' && 'text-warn',
                       due.tone === 'none' && 'text-muted',
-                      due.tone === 'normal' && 'text-slate-300',
+                      due.tone === 'normal' && 'text-text-secondary',
                     )}
                   >
                     {due.text}
@@ -259,24 +324,74 @@ function StatCard({
   icon: React.ReactNode
   tone: 'brand' | 'sky' | 'ok' | 'warn'
 }) {
-  const tones = {
-    brand: 'from-brand/20 to-brand/5 text-brand-soft',
-    sky: 'from-sky-500/20 to-sky-500/5 text-sky-300',
-    ok: 'from-emerald-500/20 to-emerald-500/5 text-ok',
-    warn: 'from-amber-500/20 to-amber-500/5 text-warn',
-  }
   return (
     <Card className="overflow-hidden">
-      <div className={cn('flex items-center gap-3 bg-gradient-to-br px-5 py-4', tones[tone])}>
+      <div className={cn('flex items-center gap-3 bg-gradient-to-br px-5 py-4', STAT_CARD_TONES[tone])}>
         <div>{icon}</div>
         <div>
           <p className="text-xs text-muted">{title}</p>
-          <p className="font-mono text-2xl font-semibold text-white">
+          <p className="font-mono text-2xl font-semibold text-text-primary">
             {value.toString().padStart(2, '0')}
           </p>
         </div>
       </div>
     </Card>
+  )
+}
+
+function ProjectProgressCard({ project }: { project: Project }) {
+  const status = PROJECT_STATUS_META[project.status]
+  const due = dueLabel(project.dueDate)
+
+  return (
+    <Link to={`/projects/${project.id}`} className="group">
+      <Card className="p-4 h-full transition hover:border-brand/40 hover:shadow-lg">
+        <div className="flex items-start justify-between mb-3">
+          <div className="flex-1 min-w-0">
+            <h4 className="font-medium text-text-primary truncate group-hover:text-brand-soft transition">
+              {project.name}
+            </h4>
+            {project.description && (
+              <p className="text-xs text-muted mt-0.5 line-clamp-2">{project.description}</p>
+            )}
+          </div>
+          <span className={cn('shrink-0 ml-2 px-2 py-1 rounded text-xs font-medium', status.bg, status.text)}>
+            {status.label}
+          </span>
+        </div>
+
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-muted">进度</span>
+            <span className="text-xs font-mono font-semibold text-text-primary">{project.progress}%</span>
+          </div>
+          <div className="h-1.5 bg-bg-border rounded-full overflow-hidden">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all duration-500',
+                project.progress === 100 ? 'bg-emerald-500' :
+                project.progress > 70 ? 'bg-brand' :
+                project.progress > 40 ? 'bg-amber-500' : 'bg-sky-500'
+              )}
+              style={{ width: `${project.progress}%` }}
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-muted">
+          <div className="flex items-center gap-1">
+            <Users2 className="h-3.5 w-3.5" />
+            <span>{project.members.length} 人</span>
+          </div>
+          {project.dueDate && (
+            <div className={cn('flex items-center gap-1', due.tone === 'overdue' && 'text-danger', due.tone === 'soon' && 'text-warn')}>
+              <Calendar className="h-3.5 w-3.5" />
+              <span>{due.text}</span>
+            </div>
+          )}
+        </div>
+      </Card>
+    </Link>
   )
 }
 
