@@ -7,7 +7,9 @@ import express, {
   type NextFunction,
 } from 'express'
 import cors from 'cors'
-import dotenv from 'dotenv'
+// 必须先于业务模块加载：routes 链会初始化 db.ts（读 FORTUNE_DB_PATH / FORTUNE_SEED_DEMO），
+// ESM 按声明顺序求值，若放到文件尾部则 db 初始化时 .env 尚未生效
+import 'dotenv/config'
 import { rateLimit } from './lib/rateLimit.ts'
 
 import authRoutes from './routes/auth.ts'
@@ -26,8 +28,6 @@ import { router as exportRoutes } from './routes/export.ts'
 import feishuRoutes from './routes/feishu.ts'
 import backupRoutes from './routes/backup.ts'
 import { router as opLogRoutes } from './routes/opLogs.ts'
-
-dotenv.config()
 
 const app: express.Application = express()
 

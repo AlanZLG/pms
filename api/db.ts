@@ -272,12 +272,15 @@ try {
   // 迁移已执行过，忽略重复添加字段错误
 }
 
-try {
-  db.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, name, avatar_color, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run('finance', 'finance@pm.dev', bcrypt.hashSync('12345', 10), '项目核算人员', '#06B6D4', 'finance', new Date().toISOString())
-  console.log('[db] 已创建项目核算人员账号')
-} catch {
-  // 账号已存在
+// 演示账号：与 seed 演示数据同受 FORTUNE_SEED_DEMO 开关控制，设为 0 时不补插（已删除不复活）
+if (process.env.FORTUNE_SEED_DEMO !== '0') {
+  try {
+    db.prepare("INSERT OR IGNORE INTO users (id, email, password_hash, name, avatar_color, role, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run('finance', 'finance@pm.dev', bcrypt.hashSync('12345', 10), '项目核算人员', '#06B6D4', 'finance', new Date().toISOString())
+    console.log('[db] 已创建项目核算人员账号')
+  } catch {
+    // 账号已存在
+  }
 }
 
 try {
