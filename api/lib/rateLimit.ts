@@ -10,15 +10,15 @@ export function rateLimit(windowMs: number, max: number, prefix = 'global') {
     const now = Date.now()
     let b = buckets.get(key)
     if (!b || b.resetAt < now) { b = { count: 0, resetAt: now + windowMs }; buckets.set(key, b) }
-    b.count++
     const remaining = Math.max(0, max - b.count)
     res.setHeader('X-RateLimit-Limit', String(max))
     res.setHeader('X-RateLimit-Remaining', String(remaining))
     res.setHeader('X-RateLimit-Reset', String(Math.ceil(b.resetAt / 1000)))
-    if (b.count > max) {
+    if (b.count >= max) {
       res.setHeader('Retry-After', String(Math.ceil((b.resetAt - now) / 1000)))
       return res.status(429).json({ success: false, error: '请求过于频繁,请稍后再试' })
     }
+    b.count++
     next()
   }
 }

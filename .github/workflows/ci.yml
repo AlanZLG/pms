@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查（tsc --noEmit）
+        run: npm run check
+
+      - name: Lint（0 错误 0 警告）
+        run: npm run lint
+
+      - name: 测试（单元 + e2e 集成：真实服务 + 临时库）
+        run: npm test
+
+      - name: 构建
+        run: npm run build

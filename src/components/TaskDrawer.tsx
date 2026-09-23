@@ -1,7 +1,14 @@
 // 任务详情抽屉(含评论 + 附件)
 
 import { useEffect, useState, useRef } from 'react'
-import { X, Send, Trash2, Calendar, Flag, Tag, Check, Plus, AtSign, Paperclip, Download, FileText, FileImage, FileCode, ChevronDown, ChevronUp, Clock, UserPlus, Activity, Calendar as CalendarIcon, Trash2 as RestoreIcon, Sparkles, ArrowRight } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { X, Send, Trash2, Calendar, Flag, Tag, Check, Plus, AtSign, Paperclip, Download, FileText, FileImage, FileCode, ChevronDown, ChevronUp, Clock, UserPlus, Activity, Calendar as CalendarIcon, Trash2 as RestoreIcon, Sparkles, ArrowRight, FileSpreadsheet, GripVertical } from 'lucide-react'
+import {
+  DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  SortableContext, verticalListSortingStrategy, useSortable, arrayMove,
+} from '@dnd-kit/sortable'
 import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
 import { Avatar, Button, PriorityBadge, StatusBadge, LabelTag, Textarea, Input } from '@/components/ui'
@@ -10,7 +17,8 @@ import { useAsync } from '@/hooks/useAsync'
 import { fromNow, dueLabel } from '@/lib/date'
 import { cn, sortUsers } from '@/lib/utils'
 import { inlineDiff, parseChangeDetail } from '@/lib/diff'
-import type { Task, Comment, Subtask, User, Attachment, TaskHistory } from '../../shared/types'
+import TaskToOpLogDialog from '@/components/TaskToOpLogDialog'
+import type { Task, Comment, Subtask, User, Attachment, TaskHistory, TaskHours } from '../../shared/types'
 
 interface Props {
   taskId: string | null
@@ -27,11 +35,18 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const [showAllHistory, setShowAllHistory] = useState(false)
   const [newSubtask, setNewSubtask] = useState('')
+  const [newSubtaskAssignee, setNewSubtaskAssignee] = useState('')
   const [subtaskBusy, setSubtaskBusy] = useState(false)
   const [loading, setLoading] = useState(false)
   const [comment, setComment] = useState('')
   const [posting, setPosting] = useState(false)
   const [uploading, setUploading] = useState(false)
+  // 工时登记
+  const [hours, setHours] = useState<TaskHours[]>([])
+  const [hoursForm, setHoursForm] = useState({ date: new Date().toISOString().slice(0, 10), plannedHours: '', actualHours: '', billedHours: '', description: '' })
+  const [hoursBusy, setHoursBusy] = useState(false)
+  // 转运维台账
+  const [showOpLogDialog, setShowOpLogDialog] = useState(false)
   const user = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -118,16 +133,35 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
         setHistory(r.history || [])
       })
       .finally(() => setLoading(false))
+    api
+      .listTaskHours(taskId)
+      .then((r) => setHours(r.hours || []))
+      .catch(() => setHours([]))
   }, [taskId])
+
+  /** 重新拉取任务信息（同步进度等字段） */
+  async function refreshTask() {
+    if (!task) return
+    try {
+      const r = await api.getTask(task.id)
+      setTask(r.task)
+      setSubtasks(r.subtasks || [])
+    } catch {
+      // 忽略刷新错误
+    }
+  }
 
   async function addSubtask() {
     if (!task || !newSubtask.trim()) return
     setSubtaskBusy(true)
     try {
-      const { subtask: s } = await api.createSubtask(task.id, newSubtask.trim())
+      const { subtask: s } = await api.createSubtask(task.id, newSubtask.trim(), newSubtaskAssignee || null)
       setSubtasks((prev) => [...prev, s])
       setNewSubtask('')
+      setNewSubtaskAssignee('')
       refreshComments()
+      refreshTask()
+      onChanged()
     } catch (e) {
       notify('error', getErrorMessage(e, '添加失败'))
     } finally {
@@ -140,9 +174,23 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     try {
       await api.updateSubtask(s.id, { done: !s.done })
       refreshComments()
+      refreshTask()
+      onChanged()
     } catch (e) {
       setSubtasks((prev) => prev.map((x) => (x.id === s.id ? { ...x, done: s.done } : x)))
       notify('error', getErrorMessage(e, '更新失败'))
+    }
+  }
+
+  /** 指派/变更子任务负责人 */
+  async function assignSubtask(s: Subtask, assigneeId: string | null) {
+    setSubtasks((prev) => prev.map((x) => (x.id === s.id ? { ...x, assigneeId } : x)))
+    try {
+      await api.updateSubtask(s.id, { assigneeId })
+      onChanged()
+    } catch (e) {
+      setSubtasks((prev) => prev.map((x) => (x.id === s.id ? { ...x, assigneeId: s.assigneeId } : x)))
+      notify('error', getErrorMessage(e, '指派失败'))
     }
   }
 
@@ -152,10 +200,103 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     try {
       await api.deleteSubtask(s.id)
       refreshComments()
+      refreshTask()
+      onChanged()
     } catch (e) {
       setSubtasks(prev)
       notify('error', getErrorMessage(e, '删除失败'))
     }
+  }
+
+  // ===== 子任务编辑 / 拖拽排序 =====
+  const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null)
+  const [editSubtaskTitle, setEditSubtaskTitle] = useState('')
+
+  function startEditSubtask(s: Subtask) {
+    setEditingSubtaskId(s.id)
+    setEditSubtaskTitle(s.title)
+  }
+
+  async function saveSubtaskEdit(s: Subtask) {
+    const title = editSubtaskTitle.trim()
+    setEditingSubtaskId(null)
+    if (!title || title === s.title) return
+    const prev = subtasks
+    setSubtasks((p) => p.map((x) => (x.id === s.id ? { ...x, title } : x)))
+    try {
+      await api.updateSubtask(s.id, { title })
+      refreshComments()
+      onChanged()
+    } catch (e) {
+      setSubtasks(prev)
+      notify('error', getErrorMessage(e, '修改失败'))
+    }
+  }
+
+  const subtaskSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
+
+  async function handleSubtaskDragEnd(e: DragEndEvent) {
+    const { active, over } = e
+    if (!over || active.id === over.id || !task) return
+    const oldIndex = subtasks.findIndex((s) => s.id === active.id)
+    const newIndex = subtasks.findIndex((s) => s.id === over.id)
+    if (oldIndex < 0 || newIndex < 0) return
+    const prev = subtasks
+    const next = arrayMove(prev, oldIndex, newIndex)
+    setSubtasks(next)
+    try {
+      await api.reorderSubtasks(task.id, next.map((s) => s.id))
+    } catch (err) {
+      setSubtasks(prev)
+      notify('error', getErrorMessage(err, '排序失败'))
+    }
+  }
+
+  // ===== 工时登记 =====
+  const totalActualHours = hours.reduce((sum, h) => sum + h.actualHours, 0)
+  const totalBilledHours = hours.reduce((sum, h) => sum + h.billedHours, 0)
+
+  async function addHours() {
+    if (!task) return
+    const actual = Number(hoursForm.actualHours) || 0
+    const billed = Number(hoursForm.billedHours) || 0
+    const planned = Number(hoursForm.plannedHours) || 0
+    if (!hoursForm.date || (actual <= 0 && billed <= 0)) {
+      notify('error', '请填写日期和至少一项工时')
+      return
+    }
+    setHoursBusy(true)
+    try {
+      const { record } = await api.createTaskHours(task.id, {
+        date: hoursForm.date,
+        plannedHours: planned,
+        actualHours: actual,
+        billedHours: billed,
+        description: hoursForm.description.trim(),
+      })
+      setHours((prev) => [...prev, record])
+      setHoursForm({ date: hoursForm.date, plannedHours: '', actualHours: '', billedHours: '', description: '' })
+      notify('success', '工时已登记')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '工时登记失败'))
+    } finally {
+      setHoursBusy(false)
+    }
+  }
+
+  async function removeHours(id: string) {
+    try {
+      await api.deleteTaskHours(id)
+      setHours((prev) => prev.filter((h) => h.id !== id))
+      notify('success', '工时记录已删除')
+    } catch (e) {
+      notify('error', getErrorMessage(e, '删除失败'))
+    }
+  }
+
+  function userName(id: string | null | undefined): string {
+    if (!id) return ''
+    return allUsers.find((u) => u.id === id)?.name || ''
   }
 
   async function refreshComments() {
@@ -232,9 +373,9 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   }
 
-  const due = dueLabel(task?.dueDate || null)
+  const due = dueLabel(task?.dueDate || null, task?.status === 'done')
 
-  return (
+  return createPortal(
     <div className={cn('fixed inset-0 z-40 flex', taskId ? 'pointer-events-auto' : 'pointer-events-none')}>
       {/* 背景遮罩 */}
       <div
@@ -297,6 +438,19 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                   <span className="ml-auto">
                     <PriorityBadge priority={task.priority} />
                   </span>
+                </div>
+                <div className="col-span-2 flex items-center gap-2 text-muted">
+                  <Clock className="h-4 w-4" />
+                  <span>进度</span>
+                  <div className="ml-auto flex flex-1 items-center justify-end gap-2">
+                    <div className="h-1.5 w-32 overflow-hidden rounded-full bg-bg-soft">
+                      <div
+                        className="h-full rounded-full bg-brand transition-all"
+                        style={{ width: `${task.progress || 0}%` }}
+                      />
+                    </div>
+                    <span className="w-10 text-right font-mono text-text-secondary">{task.progress || 0}%</span>
+                  </div>
                 </div>
                 {task.labels.length > 0 && (
                   <div className="col-span-2 flex items-center gap-2 text-muted">
@@ -395,36 +549,27 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                   )}
                 </div>
                 <ul className="space-y-1.5">
-                  {subtasks.map((s) => (
-                    <li key={s.id} className="flex items-center gap-2 rounded-lg px-1 py-1 group">
-                      <button
-                        onClick={() => toggleSubtask(s)}
-                        className={cn(
-                          'flex h-5 w-5 shrink-0 items-center justify-center rounded border transition',
-                          s.done
-                            ? 'border-ok bg-ok text-text-primary'
-                            : 'border-bg-border hover:border-brand',
-                        )}
-                      >
-                        {s.done && <Check className="h-3 w-3" />}
-                      </button>
-                      <span
-                        className={cn(
-                          'flex-1 text-sm transition',
-                          s.done ? 'text-muted line-through' : 'text-text-secondary',
-                        )}
-                      >
-                        {s.title}
-                      </span>
-                      <button
-                        onClick={() => removeSubtask(s)}
-                        className="text-muted opacity-0 hover:text-danger group-hover:opacity-100"
-                        title="删除"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </li>
-                  ))}
+                  <DndContext sensors={subtaskSensors} collisionDetection={closestCenter} onDragEnd={handleSubtaskDragEnd}>
+                    <SortableContext items={subtasks.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                      {subtasks.map((s) => (
+                        <SortableSubtaskRow
+                          key={s.id}
+                          s={s}
+                          editing={editingSubtaskId === s.id}
+                          editTitle={editSubtaskTitle}
+                          onEditTitleChange={setEditSubtaskTitle}
+                          onStartEdit={startEditSubtask}
+                          onSaveEdit={saveSubtaskEdit}
+                          onCancelEdit={() => setEditingSubtaskId(null)}
+                          onToggle={toggleSubtask}
+                          onAssign={assignSubtask}
+                          onRemove={removeSubtask}
+                          users={sortUsers(allUsers)}
+                          assigneeName={s.assigneeId ? userName(s.assigneeId) : null}
+                        />
+                      ))}
+                    </SortableContext>
+                  </DndContext>
                   {subtasks.length === 0 && (
                     <li className="rounded-xl border border-dashed border-bg-border px-3 py-4 text-center text-xs text-muted">
                       还没有子任务
@@ -442,9 +587,116 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                       }
                     }}
                     placeholder="添加子任务,回车确认"
-                    className="text-sm"
+                    className="flex-1 text-sm"
                   />
+                  <select
+                    value={newSubtaskAssignee}
+                    onChange={(e) => setNewSubtaskAssignee(e.target.value)}
+                    className="h-9 shrink-0 rounded-lg border border-bg-border bg-bg-soft px-2 text-xs text-muted outline-none focus:border-brand"
+                    title="子任务负责人（可选）"
+                  >
+                    <option value="">负责人…</option>
+                    {sortUsers(allUsers).map((u) => (
+                      <option key={u.id} value={u.id}>{u.name}</option>
+                    ))}
+                  </select>
                   <Button size="sm" variant="soft" onClick={addSubtask} disabled={subtaskBusy || !newSubtask.trim()}>
+                    <Plus className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* 工时登记（内部投入 / 对客户计费分开） */}
+              <div className="mt-6">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-display text-base text-text-primary">工时登记 ({hours.length})</h3>
+                  <div className="flex items-center gap-3 text-xs text-muted">
+                    <span>
+                      内部投入 <span className="font-mono text-text-secondary">{totalActualHours.toFixed(1)}h</span>
+                    </span>
+                    <span>
+                      计费工数 <span className="font-mono text-brand-soft">{totalBilledHours.toFixed(1)}h</span>
+                    </span>
+                  </div>
+                </div>
+                <ul className="space-y-1.5">
+                  {hours.map((h) => (
+                    <li
+                      key={h.id}
+                      className="group flex items-center gap-2 rounded-lg bg-bg-panel/50 px-3 py-2 text-sm"
+                    >
+                      <Clock className="h-3.5 w-3.5 shrink-0 text-muted" />
+                      <span className="font-mono text-xs text-text-secondary">{h.date}</span>
+                      <span className="shrink-0 rounded-full bg-bg-soft px-2 py-0.5 text-xs text-muted">
+                        {userName(h.userId) || '未知'}
+                      </span>
+                      <span className="text-xs text-text-secondary">内部 {h.actualHours.toFixed(1)}h</span>
+                      {h.plannedHours > 0 && <span className="text-xs text-muted">计划 {h.plannedHours.toFixed(1)}h</span>}
+                      <span className="text-xs text-brand-soft">计费 {h.billedHours.toFixed(1)}h</span>
+                      {h.description && (
+                        <span className="min-w-0 flex-1 truncate text-xs text-muted" title={h.description}>
+                          {h.description}
+                        </span>
+                      )}
+                      <button
+                        onClick={() => removeHours(h.id)}
+                        className="ml-auto shrink-0 text-muted opacity-0 transition hover:text-danger group-hover:opacity-100"
+                        title="删除"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                  {hours.length === 0 && (
+                    <li className="rounded-xl border border-dashed border-bg-border px-3 py-4 text-center text-xs text-muted">
+                      还没有工时记录
+                    </li>
+                  )}
+                </ul>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Input
+                    type="date"
+                    value={hoursForm.date}
+                    onChange={(e) => setHoursForm({ ...hoursForm, date: e.target.value })}
+                    className="w-36 text-sm"
+                  />
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="计划工时"
+                    value={hoursForm.plannedHours}
+                    onChange={(e) => setHoursForm({ ...hoursForm, plannedHours: e.target.value })}
+                    className="w-24 text-sm"
+                    title="本次投入对应的计划工时（选填）"
+                  />
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="内部工时"
+                    value={hoursForm.actualHours}
+                    onChange={(e) => setHoursForm({ ...hoursForm, actualHours: e.target.value })}
+                    className="w-24 text-sm"
+                    title="实际投入工时（内部成本口径）"
+                  />
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.5"
+                    placeholder="计费工数"
+                    value={hoursForm.billedHours}
+                    onChange={(e) => setHoursForm({ ...hoursForm, billedHours: e.target.value })}
+                    className="w-24 text-sm"
+                    title="向客户结算的工数"
+                  />
+                  <Input
+                    placeholder="备注"
+                    value={hoursForm.description}
+                    onChange={(e) => setHoursForm({ ...hoursForm, description: e.target.value })}
+                    className="min-w-0 flex-1 text-sm"
+                  />
+                  <Button size="sm" variant="soft" onClick={addHours} disabled={hoursBusy}>
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -602,9 +854,14 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                 </div>
               </div>
               <div className="flex justify-between gap-2">
-                <Button variant="danger" size="sm" onClick={removeTask}>
-                  <Trash2 className="h-3.5 w-3.5" /> 删除任务
-                </Button>
+                <div className="flex gap-2">
+                  <Button variant="danger" size="sm" onClick={removeTask}>
+                    <Trash2 className="h-3.5 w-3.5" /> 删除任务
+                  </Button>
+                  <Button variant="soft" size="sm" onClick={() => setShowOpLogDialog(true)} title="复制任务内容到运维台账/课题表，保存后自动关联">
+                    <FileSpreadsheet className="h-3.5 w-3.5" /> 转台账/课题表
+                  </Button>
+                </div>
                 <Button size="sm" onClick={postComment} disabled={posting || !comment.trim()}>
                   <Send className="h-3.5 w-3.5" /> 发表评论
                 </Button>
@@ -612,8 +869,22 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
             </div>
           </div>
         )}
+
+        {/* 任务 → 运维台账转换对话框 */}
+        {task && (
+          <TaskToOpLogDialog
+            open={showOpLogDialog}
+            task={task}
+            onClose={() => setShowOpLogDialog(false)}
+            onCreated={() => {
+              refreshComments()
+              onChanged()
+            }}
+          />
+        )}
       </aside>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -670,5 +941,119 @@ function DiffedValue({ oldVal, newVal }: { oldVal: string; newVal: string }) {
         )}
       </span>
     </span>
+  )
+}
+
+// ===== 子任务行（可拖拽 / 可编辑）=====
+function SortableSubtaskRow({
+  s,
+  editing,
+  editTitle,
+  onEditTitleChange,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onToggle,
+  onAssign,
+  onRemove,
+  users,
+  assigneeName,
+}: {
+  s: Subtask
+  editing: boolean
+  editTitle: string
+  onEditTitleChange: (v: string) => void
+  onStartEdit: (s: Subtask) => void
+  onSaveEdit: (s: Subtask) => void
+  onCancelEdit: () => void
+  onToggle: (s: Subtask) => void
+  onAssign: (s: Subtask, assigneeId: string | null) => void
+  onRemove: (s: Subtask) => void
+  users: User[]
+  assigneeName: string | null
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: s.id })
+  const style = transform
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, transition }
+    : undefined
+  return (
+    <li
+      ref={setNodeRef}
+      style={style}
+      className={cn(
+        'group flex items-center gap-2 rounded-lg px-1 py-1',
+        isDragging && 'relative z-10 opacity-60',
+      )}
+    >
+      <button
+        {...attributes}
+        {...listeners}
+        className="shrink-0 cursor-grab touch-none text-muted opacity-0 transition hover:text-brand-soft group-hover:opacity-100 active:cursor-grabbing"
+        title="拖拽排序"
+        onClick={(e) => e.preventDefault()}
+      >
+        <GripVertical className="h-3.5 w-3.5" />
+      </button>
+      <button
+        onClick={() => onToggle(s)}
+        className={cn(
+          'flex h-5 w-5 shrink-0 items-center justify-center rounded border transition',
+          s.done
+            ? 'border-ok bg-ok text-text-primary'
+            : 'border-bg-border hover:border-brand',
+        )}
+      >
+        {s.done && <Check className="h-3 w-3" />}
+      </button>
+      {editing ? (
+        <input
+          autoFocus
+          value={editTitle}
+          onChange={(e) => onEditTitleChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              onSaveEdit(s)
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              onCancelEdit()
+            }
+          }}
+          onBlur={() => onSaveEdit(s)}
+          className="min-w-0 flex-1 rounded border border-brand bg-bg-soft px-1.5 py-0.5 text-sm text-text-primary outline-none"
+        />
+      ) : (
+        <span
+          onClick={() => onStartEdit(s)}
+          className={cn(
+            'min-w-0 flex-1 cursor-text truncate text-sm transition hover:text-text-primary',
+            s.done ? 'text-muted line-through' : 'text-text-secondary',
+          )}
+          title={s.title}
+        >
+          {s.title}
+        </span>
+      )}
+      <select
+        value={s.assigneeId || ''}
+        onChange={(e) => onAssign(s, e.target.value || null)}
+        className="max-w-[6.5rem] shrink-0 rounded border border-transparent bg-transparent px-1 py-0.5 text-xs text-muted outline-none transition hover:border-bg-border focus:border-brand"
+        title={s.assigneeId ? `负责人: ${assigneeName}` : '指派负责人'}
+      >
+        <option value="">
+          {s.assigneeId ? assigneeName || '已指派' : '指派…'}
+        </option>
+        {users.map((u) => (
+          <option key={u.id} value={u.id}>{u.name}</option>
+        ))}
+      </select>
+      <button
+        onClick={() => onRemove(s)}
+        className="text-muted opacity-0 hover:text-danger group-hover:opacity-100"
+        title="删除"
+      >
+        <Trash2 className="h-3.5 w-3.5" />
+      </button>
+    </li>
   )
 }

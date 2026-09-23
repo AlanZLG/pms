@@ -6,7 +6,7 @@ import { Card, Avatar, Button, Input } from '@/components/ui'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
-import { Download, Upload, Database, AlertTriangle } from 'lucide-react'
+import { Download, Upload, Database, AlertTriangle, KeyRound } from 'lucide-react'
 
 export default function Settings() {
   const user = useAppStore((s) => s.user)
@@ -23,6 +23,35 @@ export default function Settings() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const backupInfo = useAsync(() => api.getBackupInfo(), [])
   const notify = useAppStore((s) => s.notify)
+  const [pwdForm, setPwdForm] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' })
+  const [pwdError, setPwdError] = useState('')
+  const [pwdSaving, setPwdSaving] = useState(false)
+
+  async function handleChangePassword() {
+    setPwdError('')
+    if (!pwdForm.currentPassword || !pwdForm.newPassword) {
+      setPwdError('请填写完整')
+      return
+    }
+    if (pwdForm.newPassword.length < 5) {
+      setPwdError('新密码至少 5 位')
+      return
+    }
+    if (pwdForm.newPassword !== pwdForm.confirmPassword) {
+      setPwdError('两次输入的新密码不一致')
+      return
+    }
+    try {
+      setPwdSaving(true)
+      await api.changePassword({ currentPassword: pwdForm.currentPassword, newPassword: pwdForm.newPassword })
+      notify('success', '密码修改成功，下次登录请使用新密码')
+      setPwdForm({ currentPassword: '', newPassword: '', confirmPassword: '' })
+    } catch (e) {
+      setPwdError(getErrorMessage(e, '修改失败'))
+    } finally {
+      setPwdSaving(false)
+    }
+  }
 
   const info = me.data?.user || user
   if (!info) return null
@@ -170,6 +199,36 @@ export default function Settings() {
         <div className="mt-6 border-t border-bg-border pt-4">
           <Button variant="ghost" onClick={logout}>
             退出登录
+          </Button>
+        </div>
+      </Card>
+
+      <Card className="p-6">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand/20">
+            <KeyRound className="h-5 w-5 text-brand" />
+          </div>
+          <div>
+            <p className="font-display text-text-primary">修改密码</p>
+            <p className="text-sm text-muted">定期更换密码以保障账号安全</p>
+          </div>
+        </div>
+        <div className="space-y-3 max-w-sm">
+          <div>
+            <label className="text-sm text-muted mb-1 block">当前密码</label>
+            <Input type="password" value={pwdForm.currentPassword} onChange={(e) => setPwdForm({ ...pwdForm, currentPassword: e.target.value })} autoComplete="current-password" />
+          </div>
+          <div>
+            <label className="text-sm text-muted mb-1 block">新密码（至少 5 位）</label>
+            <Input type="password" value={pwdForm.newPassword} onChange={(e) => setPwdForm({ ...pwdForm, newPassword: e.target.value })} autoComplete="new-password" />
+          </div>
+          <div>
+            <label className="text-sm text-muted mb-1 block">确认新密码</label>
+            <Input type="password" value={pwdForm.confirmPassword} onChange={(e) => setPwdForm({ ...pwdForm, confirmPassword: e.target.value })} autoComplete="new-password" onKeyDown={(e) => { if (e.key === 'Enter') handleChangePassword() }} />
+          </div>
+          {pwdError && <p className="text-xs text-red-400">{pwdError}</p>}
+          <Button onClick={handleChangePassword} disabled={pwdSaving}>
+            {pwdSaving ? '保存中...' : '修改密码'}
           </Button>
         </div>
       </Card>

@@ -8,6 +8,9 @@ import type {
   SavedFilter, TaskFilter, SearchResult, KanbanColumn, KanbanColumnInput,
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
   CustomRole, PermissionCategory,
+  OpLog, OpLogInput, OpLogFilter, OpLogOptions, OpLogStat,
+  OpLogAiAnalyzeRequest, OpLogAiAnalyzeResponse, OpLogAiAnalysis, OpLogAiCase, OpLogAiStatus,
+  AiChatRequest,
 } from '../../shared/types'
 
 const TOKEN_KEY = 'pm_token'
@@ -84,8 +87,10 @@ export const api = {
   login: (data: { email: string; password: string }) =>
     request<AuthResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }),
   me: () => request<{ user: User }>('/api/auth/me'),
-  updateProfile: (data: { name: string }) =>
+  updateProfile: (data: { name: string; avatarColor?: string }) =>
     request<{ user: User }>('/api/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
+  changePassword: (data: { currentPassword: string; newPassword: string }) =>
+    request<{ success: boolean }>('/api/auth/me/password', { method: 'PUT', body: JSON.stringify(data) }),
 
   // projects
   listProjects: () => request<{ projects: Project[] }>('/api/projects'),
@@ -94,6 +99,18 @@ export const api = {
     request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
   updateProject: (id: string, data: Partial<Project>) =>
     request<{ project: Project }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteProject: (id: string) =>
+    request<{ ok?: boolean; pendingApproval?: boolean; message?: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
+  listPendingDeletions: () => request<{ projects: Project[] }>('/api/projects/pending-deletions'),
+  approveProjectDeletion: (id: string) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/deletion/approve`, { method: 'POST' }),
+  rejectProjectDeletion: (id: string, data?: { comment?: string }) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/deletion/reject`, { method: 'POST', body: JSON.stringify(data || {}) }),
+  restoreProject: (id: string) =>
+    request<{ ok: boolean }>(`/api/projects/${id}/restore`, { method: 'POST' }),
+  // v1.9.0 结项合并：运维增强项目台账/课题记录批量转绑到目标运维项目
+  mergeProject: (id: string, targetProjectId: string) =>
+    request<{ movedOpLogs: number; targetName: string; project: Project }>(`/api/projects/${id}/merge`, { method: 'POST', body: JSON.stringify({ targetProjectId }) }),
   addMember: (projectId: string, userId: string, role?: string) =>
     request<{ members: Project['members'] }>(`/api/projects/${projectId}/members`, {
       method: 'POST',
@@ -183,6 +200,9 @@ export const api = {
     request<{ task: Task }>(`/api/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   updateTaskStatus: (taskId: string, status: Task['status']) =>
     request<{ task: Task }>(`/api/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  // 看板列内排序持久化
+  reorderTasks: (taskIds: string[]) =>
+    request<{ ok: boolean; count: number }>('/api/tasks/reorder', { method: 'POST', body: JSON.stringify({ taskIds }) }),
   deleteTask: (taskId: string) =>
     request<{ ok: boolean }>(`/api/tasks/${taskId}`, { method: 'DELETE' }),
   restoreTask: (taskId: string) =>
@@ -190,7 +210,7 @@ export const api = {
   physicalDeleteTask: (taskId: string) =>
     request<{ ok: boolean }>(`/api/tasks/${taskId}/physical`, { method: 'DELETE' }),
   listTrash: (projectId?: string) =>
-    request<{ tasks: Task[] }>(`/api/trash${projectId ? `?projectId=${projectId}` : ''}`),
+    request<{ tasks: Task[]; projects: Project[] }>(`/api/trash${projectId ? `?projectId=${projectId}` : ''}`),
   addComment: (taskId: string, content: string) =>
     request<{ comment: Comment }>(`/api/tasks/${taskId}/comments`, {
       method: 'POST',
@@ -198,18 +218,23 @@ export const api = {
     }),
 
   // subtasks
-  createSubtask: (taskId: string, title: string) =>
+  createSubtask: (taskId: string, title: string, assigneeId?: string | null) =>
     request<{ subtask: Subtask }>(`/api/tasks/${taskId}/subtasks`, {
       method: 'POST',
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, assigneeId: assigneeId || null }),
     }),
-  updateSubtask: (subtaskId: string, data: { title?: string; done?: boolean }) =>
+  updateSubtask: (subtaskId: string, data: { title?: string; done?: boolean; assigneeId?: string | null }) =>
     request<{ ok: boolean }>(`/api/subtasks/${subtaskId}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
   deleteSubtask: (subtaskId: string) =>
     request<{ ok: boolean }>(`/api/subtasks/${subtaskId}`, { method: 'DELETE' }),
+  reorderSubtasks: (taskId: string, ids: string[]) =>
+    request<{ ok: boolean }>(`/api/tasks/${taskId}/subtasks/reorder`, {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    }),
 
   // task dependencies
   getTaskDependencies: (taskId: string) =>
@@ -230,13 +255,30 @@ export const api = {
     request<{ ok: boolean }>(`/api/dependencies/${depId}`, { method: 'DELETE' }),
 
   // stats
-  overview: () => request<StatsOverview>('/api/stats/overview'),
-  burndown: (projectId?: string) =>
-    request<BurndownData>(`/api/stats/burndown${projectId ? `?projectId=${projectId}` : ''}`),
-  workload: () => request<{ workload: WorkloadItem[] }>('/api/stats/workload'),
+  overview: (projectId?: string, days?: number) => {
+    const qs = new URLSearchParams()
+    if (projectId) qs.set('projectId', projectId)
+    if (days) qs.set('days', String(days))
+    const q = qs.toString()
+    return request<StatsOverview>(`/api/stats/overview${q ? `?${q}` : ''}`)
+  },
+  burndown: (projectId?: string, days?: number) => {
+    const qs = [projectId ? `projectId=${projectId}` : '', days ? `days=${days}` : ''].filter(Boolean).join('&')
+    return request<BurndownData>(`/api/stats/burndown${qs ? `?${qs}` : ''}`)
+  },
+  workload: (projectId?: string, days?: number) => {
+    const qs = [projectId ? `projectId=${projectId}` : '', days ? `days=${days}` : ''].filter(Boolean).join('&')
+    return request<{ workload: WorkloadItem[] }>(`/api/stats/workload${qs ? `?${qs}` : ''}`)
+  },
 
   // team
-  listUsers: () => request<{ users: (User & { taskCount: number; activeCount: number })[] }>('/api/team'),
+  listUsers: () => request<{ users: (User & { taskCount: number; activeCount: number })[]; limited?: boolean }>('/api/team'),
+  createUser: (data: { email: string; password: string; name: string; role: string }) =>
+    request<{ user: User }>('/api/team', { method: 'POST', body: JSON.stringify(data) }),
+  updateUserProfile: (userId: string, data: { name?: string; email?: string }) =>
+    request<{ user: User }>(`/api/team/${userId}/profile`, { method: 'PATCH', body: JSON.stringify(data) }),
+  resetUserPassword: (userId: string, newPassword: string) =>
+    request<{ success: boolean }>(`/api/team/${userId}/password`, { method: 'PATCH', body: JSON.stringify({ newPassword }) }),
   updateRole: (userId: string, role: string) =>
     request<{ user: User }>(`/api/team/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
   updateUserCost: (userId: string, data: { isOutsourced?: boolean; hourlyRate?: number | null; costCenter?: string | null; categoryId?: string | null }) =>
@@ -255,19 +297,39 @@ export const api = {
   // hours
   listTaskHours: (taskId: string) =>
     request<{ hours: TaskHours[] }>(`/api/tasks/${taskId}/hours`),
-  createTaskHours: (taskId: string, data: { date: string; plannedHours?: number; actualHours?: number; description?: string }) =>
+  createTaskHours: (taskId: string, data: { date: string; plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }) =>
     request<{ record: TaskHours }>(`/api/tasks/${taskId}/hours`, { method: 'POST', body: JSON.stringify(data) }),
-  updateTaskHours: (recordId: string, data: { plannedHours?: number; actualHours?: number; description?: string }) =>
+  updateTaskHours: (recordId: string, data: { plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }) =>
     request<{ record: TaskHours }>(`/api/hours/${recordId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTaskHours: (recordId: string) =>
     request<{ ok: boolean }>(`/api/hours/${recordId}`, { method: 'DELETE' }),
-  listMyHours: () =>
-    request<{ hours: TaskHours[] }>('/api/hours/me'),
-  listHoursByUser: (startDate?: string, endDate?: string) => {
+  // 工时报表：服务端按项目/人员/日期过滤，并返回任务计划工时汇总与按天基线
+  listStatsHours: (projectId?: string, userId?: string, startDate?: string, endDate?: string) => {
+    const params: string[] = []
+    if (projectId) params.push(`projectId=${projectId}`)
+    if (userId) params.push(`userId=${userId}`)
+    if (startDate) params.push(`startDate=${startDate}`)
+    if (endDate) params.push(`endDate=${endDate}`)
+    const url = '/api/stats/hours' + (params.length ? '?' + params.join('&') : '')
+    return request<{
+      hours: TaskHours[]
+      taskPlannedHours: number
+      /** 人员筛选时：范围内未指派负责人的任务计划工时 */
+      unassignedPlannedHours: number
+      /** 项目/期间内有登记或负责任务的人员 id（不受人员筛选影响，供下拉补齐历史参与人） */
+      registrantIds?: string[]
+      /** 任务计划工时按天均摊基线（趋势图对比用） */
+      taskPlannedByDate: { date: string; planned: number }[]
+      /** 因未设起止日期或周期过长而未进基线的任务计划工时 */
+      baselineSkippedHours: number
+    }>(url)
+  },
+  listHoursByUser: (startDate?: string, endDate?: string, projectId?: string) => {
     let url = '/api/stats/hours-by-user'
     const params: string[] = []
     if (startDate) params.push(`startDate=${startDate}`)
     if (endDate) params.push(`endDate=${endDate}`)
+    if (projectId) params.push(`projectId=${projectId}`)
     if (params.length) url += '?' + params.join('&')
     return request<{ data: HoursByUserProject[] }>(url)
   },
@@ -476,9 +538,9 @@ export const api = {
     request<{ templates: (ProjectTemplate & { taskCount: number; budgetCount: number; kanbanColumnCount: number })[] }>('/api/templates/project-templates'),
   getProjectTemplate: (id: string) =>
     request<{ template: ProjectTemplate }>(`/api/templates/project-templates/${id}`),
-  createProjectTemplate: (data: { name: string; description?: string }) =>
+  createProjectTemplate: (data: { name: string; description?: string; category?: string }) =>
     request<{ template: ProjectTemplate }>('/api/templates/project-templates', { method: 'POST', body: JSON.stringify(data) }),
-  updateProjectTemplate: (id: string, data: Partial<{ name: string; description: string }>) =>
+  updateProjectTemplate: (id: string, data: Partial<{ name: string; description: string; category: string }>) =>
     request<{ template: ProjectTemplate }>(`/api/templates/project-templates/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteProjectTemplate: (id: string) =>
     request<{ ok: boolean }>(`/api/templates/project-templates/${id}`, { method: 'DELETE' }),
@@ -526,4 +588,246 @@ export const api = {
     request<{ user: User }>(`/api/team/${userId}/custom-role`, { method: 'PATCH', body: JSON.stringify({ customRoleId }) }),
   listCustomRoles: () =>
     request<{ roles: CustomRole[] }>('/api/team/custom-roles'),
+
+  // ===== 运维台账 =====
+  listOpLogs: (filter: OpLogFilter = {}) => {
+    const params = new URLSearchParams()
+    if (filter.projectId) params.set('projectId', filter.projectId)
+    if (filter.category) params.set('category', filter.category)
+    if (filter.status) params.set('status', filter.status)
+    if (filter.system) params.set('system', filter.system)
+    if (filter.department) params.set('department', filter.department)
+    if (filter.keyword) params.set('keyword', filter.keyword)
+    if (filter.dateFrom) params.set('dateFrom', filter.dateFrom)
+    if (filter.dateTo) params.set('dateTo', filter.dateTo)
+    if (filter.sortBy) params.set('sortBy', filter.sortBy)
+    if (filter.sortDir) params.set('sortDir', filter.sortDir)
+    const query = params.toString()
+    return request<{ logs: OpLog[] }>(`/api/op-logs${query ? `?${query}` : ''}`)
+  },
+  getOpLog: (id: string) => request<{ log: OpLog }>(`/api/op-logs/${encodeURIComponent(id)}`),
+  getOpLogOptions: (projectId?: string) =>
+    request<OpLogOptions>(`/api/op-logs/options${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+  getOpLogStats: (filter: OpLogFilter = {}) => {
+    const params = new URLSearchParams()
+    if (filter.projectId) params.set('projectId', filter.projectId)
+    if (filter.category) params.set('category', filter.category)
+    if (filter.status) params.set('status', filter.status)
+    if (filter.system) params.set('system', filter.system)
+    if (filter.department) params.set('department', filter.department)
+    if (filter.keyword) params.set('keyword', filter.keyword)
+    if (filter.dateFrom) params.set('dateFrom', filter.dateFrom)
+    if (filter.dateTo) params.set('dateTo', filter.dateTo)
+    const query = params.toString()
+    return request<{ stats: OpLogStat[] }>(`/api/op-logs/stats${query ? `?${query}` : ''}`)
+  },
+  createOpLog: (data: OpLogInput) =>
+    request<{ log: OpLog }>('/api/op-logs', { method: 'POST', body: JSON.stringify(data) }),
+  updateOpLog: (id: string, data: Partial<OpLogInput>) =>
+    request<{ log: OpLog }>(`/api/op-logs/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteOpLog: (id: string) =>
+    request<{ ok: boolean }>(`/api/op-logs/${id}`, { method: 'DELETE' }),
+
+  // 台账 Excel 导入（正式写入；skipDuplicates=false 时重复行照导）
+  importOpLogs: async (file: File, projectId?: string, opts?: { skipDuplicates?: boolean }): Promise<{
+    imported: number
+    skipped: number
+    errors: string[]
+    duplicates: string[]
+    duplicateCount: number
+    fieldWarnings: string[]
+    fieldWarningCount: number
+    unknownColumns?: string[]
+  }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    if (projectId) formData.append('projectId', projectId)
+    if (opts?.skipDuplicates === false) formData.append('skipDuplicates', 'false')
+    const token = getToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+
+    const res = await fetch('/api/op-logs/import', {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      let message = `导入失败(${res.status})`
+      try {
+        const body = await res.json()
+        message = body.error || message
+      } catch {
+        // 响应体解析失败，使用默认错误信息
+      }
+      throw new Error(message)
+    }
+    return res.json()
+  },
+
+  // 台账 Excel 导入预检：只解析并统计重复，不写库（供弹窗确认）
+  importOpLogsPreview: async (file: File, projectId?: string): Promise<{
+    total: number
+    newCount: number
+    duplicateCount: number
+    dupRows: { row: number; problem: string; logDate: string }[]
+    fieldWarningCount: number
+    unknownColumns?: string[]
+    skipped: number
+    errors: string[]
+  }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('mode', 'preview')
+    if (projectId) formData.append('projectId', projectId)
+    const token = getToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+
+    const res = await fetch('/api/op-logs/import', {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      let message = `导入预检失败(${res.status})`
+      try {
+        const body = await res.json()
+        message = body.error || message
+      } catch {
+        // 响应体解析失败，使用默认错误信息
+      }
+      throw new Error(message)
+    }
+    return res.json()
+  },
+
+  // 台账 Excel 导出（带当前筛选条件）
+  exportOpLogs: async (filter: OpLogFilter = {}): Promise<void> => {
+    const token = getToken()
+    if (!token) throw new Error('未登录')
+    const params = new URLSearchParams()
+    if (filter.projectId) params.set('projectId', filter.projectId)
+    if (filter.category) params.set('category', filter.category)
+    if (filter.status) params.set('status', filter.status)
+    if (filter.system) params.set('system', filter.system)
+    if (filter.department) params.set('department', filter.department)
+    if (filter.keyword) params.set('keyword', filter.keyword)
+    if (filter.dateFrom) params.set('dateFrom', filter.dateFrom)
+    if (filter.dateTo) params.set('dateTo', filter.dateTo)
+    if (filter.sortBy) params.set('sortBy', filter.sortBy)
+    if (filter.sortDir) params.set('sortDir', filter.sortDir)
+    const query = params.toString()
+    const res = await fetch(`/api/op-logs/export.xlsx${query ? `?${query}` : ''}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`导出失败(${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `运维台账_课题表_${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
+
+  // 台账导入模板下载
+  downloadOpLogTemplate: async (): Promise<void> => {
+    const token = getToken()
+    if (!token) throw new Error('未登录')
+    const res = await fetch('/api/op-logs/template.xlsx', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) throw new Error(`下载失败(${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = '运维台账_课题表导入模板.xlsx'
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
+
+  // ===== 台账 AI 经验分析 =====
+  getOpLogAiStatus: () => request<OpLogAiStatus>('/api/op-logs/ai/status'),
+  analyzeOpLog: (data: OpLogAiAnalyzeRequest) =>
+    request<OpLogAiAnalyzeResponse>('/api/op-logs/ai/analyze', { method: 'POST', body: JSON.stringify(data) }),
+  /** 流式 AI 分析（SSE over fetch，EventSource 不支持 POST）：meta→delta→done 事件；服务端发 error 事件时抛错 */
+  async analyzeOpLogStream(
+    data: OpLogAiAnalyzeRequest,
+    handlers: {
+      onCases?: (cases: OpLogAiCase[]) => void
+      onDelta?: (text: string) => void
+      onDone?: (analysis: OpLogAiAnalysis) => void
+    },
+  ): Promise<void> {
+    const res = await postSse('/api/op-logs/ai/analyze-stream', data)
+    let failMessage: string | null = null
+    await readSseEvents(res, (event, json) => {
+      if (event === 'meta') handlers.onCases?.((json.cases as OpLogAiCase[]) || [])
+      else if (event === 'delta') handlers.onDelta?.(String(json.text || ''))
+      else if (event === 'done') handlers.onDone?.(json.analysis as OpLogAiAnalysis)
+      else if (event === 'error') failMessage = String(json.message || 'AI 分析失败')
+    })
+    if (failMessage) throw new Error(failMessage)
+  },
+
+  // ===== AI 对话式排障（P2） =====
+  /** 流式对话问答：事件协议同 analyze-stream（meta→delta→done）；signal 用于「停止生成」 */
+  async aiChatStream(
+    data: AiChatRequest,
+    handlers: {
+      onCases?: (cases: OpLogAiCase[]) => void
+      onDelta?: (text: string) => void
+    },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await postSse('/api/op-logs/ai/chat-stream', data, signal)
+    let failMessage: string | null = null
+    await readSseEvents(res, (event, json) => {
+      if (event === 'meta') handlers.onCases?.((json.cases as OpLogAiCase[]) || [])
+      else if (event === 'delta') handlers.onDelta?.(String(json.text || ''))
+      else if (event === 'error') failMessage = String(json.message || 'AI 助手回复失败')
+    })
+    if (failMessage) throw new Error(failMessage)
+  },
+}
+
+/** SSE over POST 的公共请求封装：带 token、校验响应可读 */
+async function postSse(url: string, data: unknown, signal?: AbortSignal): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(data), signal })
+  if (!res.ok || !res.body) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`流式请求失败(${res.status})${text ? ': ' + text.slice(0, 200) : ''}`)
+  }
+  return res
+}
+
+/** SSE 通用解析：按 \n\n 切块 + 残留回填，event/data 剥离后逐事件回调；无法解析的残缺块静默忽略 */
+async function readSseEvents(res: Response, onEvent: (event: string, json: Record<string, unknown>) => void): Promise<void> {
+  const reader = res.body!.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    const blocks = buf.split('\n\n')
+    buf = blocks.pop() || ''
+    for (const block of blocks) {
+      let event = 'message'
+      let payload = ''
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        else if (line.startsWith('data:')) payload += line.slice(5).trim()
+      }
+      if (!payload) continue
+      try {
+        onEvent(event, JSON.parse(payload) as Record<string, unknown>)
+      } catch {
+        // 忽略无法解析的残缺块
+      }
+    }
+  }
 }

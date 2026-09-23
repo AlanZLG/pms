@@ -30,9 +30,17 @@ export function fromNow(d: string | null): string {
   }
 }
 
-export function dueLabel(d: string | null): { text: string; tone: 'normal' | 'soon' | 'overdue' | 'none' } {
+export function dueLabel(d: string | null, done = false): { text: string; tone: 'normal' | 'soon' | 'overdue' | 'none' } {
   if (!d) return { text: '无截止', tone: 'none' }
   const date = new Date(d)
+  // 已完成的任务/项目不再显示逾期，只展示日期
+  if (done) {
+    try {
+      return { text: format(date, 'MM-dd'), tone: 'normal' }
+    } catch {
+      return { text: '无截止', tone: 'none' }
+    }
+  }
   if (isPast(date)) return { text: '已逾期', tone: 'overdue' }
   if (isToday(date)) return { text: '今天截止', tone: 'soon' }
   if (isThisWeek(date, { weekStartsOn: 1 })) return { text: format(date, 'EEEE', { locale: zhCN }), tone: 'soon' }

@@ -67,15 +67,37 @@ router.get('/me', authRequired, (req: AuthRequest, res: Response, next: NextFunc
 
 const updateProfileSchema = z.object({
   name: z.string().min(1, '昵称不能为空').max(40, '昵称不能超过40个字符'),
+  avatarColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/, '头像颜色格式不正确').optional(),
 })
 
 router.put('/me', authRequired, (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const parsed = updateProfileSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
-    const updated = userRepo.updateName(req.userId!, parsed.data.name)
+    const updated = userRepo.updateProfile(req.userId!, parsed.data)
     if (!updated) throw new ApiError(404, '用户不存在')
     res.json({ user: updated })
+  } catch (e) { next(e) }
+})
+
+// 修改自己的密码（需验证当前密码）
+router.put('/me/password', authRequired, async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const schema = z.object({
+      currentPassword: z.string().min(1, '请输入当前密码'),
+      newPassword: z.string().min(5, '新密码至少 5 位'),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const user = userRepo.findById(req.userId!)
+    if (!user) throw new ApiError(404, '用户不存在')
+    const { default: db } = await import('../db.ts')
+    const raw = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id) as { password_hash: string }
+    if (!bcrypt.compareSync(parsed.data.currentPassword, raw.password_hash)) {
+      throw new ApiError(400, '当前密码不正确')
+    }
+    userRepo.updatePassword(user.id, bcrypt.hashSync(parsed.data.newPassword, 10))
+    res.json({ success: true })
   } catch (e) { next(e) }
 })
 

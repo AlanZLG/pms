@@ -18,6 +18,7 @@ import {
   Trash2,
   Layers,
   Shield,
+  ClipboardList,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/app'
@@ -32,6 +33,7 @@ const navItems = [
   { to: '/projects', label: '项目', icon: FolderKanban },
   { to: '/stats', label: '统计', icon: BarChart3 },
   { to: '/hours', label: '工时报表', icon: BarChart3 },
+  { to: '/op-logs', label: '运维台账/课题表', icon: ClipboardList },
   { to: '/team', label: '团队', icon: Users },
   { to: '/notifications', label: '通知', icon: Bell },
   { to: '/trash', label: '回收站', icon: Trash2 },
@@ -158,6 +160,13 @@ function SidebarContent({
   const user = useAppStore((s) => s.user)
   const isAdmin = user?.role === 'admin'
 
+  // 团队入口需要 team.view 权限（admin/finance/owner 或自定义角色授权）
+  const canViewTeam =
+    user?.role === 'admin' ||
+    user?.role === 'finance' ||
+    user?.role === 'owner' ||
+    !!user?.customRole?.permissions?.some((p) => p.key === 'team.view')
+
   return (
     <>
       <div className="flex h-16 items-center gap-2.5 px-4">
@@ -172,7 +181,7 @@ function SidebarContent({
         )}
       </div>
       <nav className="mt-4 flex flex-1 flex-col gap-1 px-3">
-        {navItems.map((item) => {
+        {navItems.filter((item) => item.to !== '/team' || canViewTeam).map((item) => {
           const isNotif = item.to === '/notifications'
           return (
             <NavLink
@@ -256,5 +265,5 @@ function SidebarContent({
 }
 
 function roleLabel(role: string) {
-  return role === 'admin' ? '系统管理员' : role === 'finance' ? '财务人员' : role === 'owner' ? '项目负责人' : role === 'guest' ? '访客' : '团队成员'
+  return role === 'admin' ? '系统管理员' : role === 'finance' ? '项目核算人员' : role === 'owner' ? '项目负责人' : role === 'guest' ? '访客' : '团队成员'
 }

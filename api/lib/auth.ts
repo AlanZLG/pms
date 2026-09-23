@@ -13,7 +13,13 @@ export interface AuthRequest extends Request {
 }
 
 export function signToken(userId: string, role: string): string {
-  return jwt.sign({ sub: userId, role }, JWT_SECRET, { expiresIn: '7d' })
+  const tv = userRepo.getTokenVersion(userId)
+  return jwt.sign({ sub: userId, role, tv }, JWT_SECRET, { expiresIn: '7d' })
+}
+
+function verifyTokenVersion(payload: { sub: string; role: string; tv?: number }): boolean {
+  const dbVersion = userRepo.getTokenVersion(payload.sub)
+  return payload.tv === dbVersion
 }
 
 export function authRequired(req: AuthRequest, _res: Response, next: NextFunction) {
@@ -23,7 +29,10 @@ export function authRequired(req: AuthRequest, _res: Response, next: NextFunctio
   }
   const token = header.slice(7)
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string }
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string; tv?: number }
+    if (!verifyTokenVersion(payload)) {
+      return next(new ApiError(401, '登录凭证已失效，请重新登录'))
+    }
     req.userId = payload.sub
     req.userRole = payload.role
     next()
@@ -37,9 +46,11 @@ export function authOptional(req: AuthRequest, _res: Response, next: NextFunctio
   if (!header || !header.startsWith('Bearer ')) return next()
   const token = header.slice(7)
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string }
-    req.userId = payload.sub
-    req.userRole = payload.role
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string; tv?: number }
+    if (verifyTokenVersion(payload)) {
+      req.userId = payload.sub
+      req.userRole = payload.role
+    }
   } catch {
     // 忽略
   }
@@ -53,11 +64,14 @@ export function financeRequired(req: AuthRequest, _res: Response, next: NextFunc
   }
   const token = header.slice(7)
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string }
+    const payload = jwt.verify(token, JWT_SECRET) as { sub: string; role: string; tv?: number }
+    if (!verifyTokenVersion(payload)) {
+      return next(new ApiError(401, '登录凭证已失效，请重新登录'))
+    }
     req.userId = payload.sub
     req.userRole = payload.role
     if (payload.role !== 'admin' && payload.role !== 'finance') {
-      return next(new ApiError(403, '仅管理员或财务人员可访问'))
+      return next(new ApiError(403, '仅管理员或项目核算人员可访问'))
     }
     next()
   } catch {

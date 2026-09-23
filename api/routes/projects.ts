@@ -5,9 +5,10 @@ import { z } from 'zod'
 import multer from 'multer'
 import bcrypt from 'bcrypt'
 import ExcelJS from 'exceljs'
-import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo, budgetRepo } from '../repository/repo.ts'
-import { authRequired, type AuthRequest } from '../lib/auth.ts'
+import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo, budgetRepo, notificationRepo } from '../repository/repo.ts'
+import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
+import { normalizeProjectType } from '../../shared/types.ts'
 import type { ProjectStatus, MemberRole } from '../../shared/types.ts'
 
 const router = Router()
@@ -30,8 +31,12 @@ const upload = multer({
   }
 })
 
+const PROJECT_TYPE_MSG = '项目类型必须是：运维项目/开发项目/咨询项目/实施项目/产品迭代/运维增强'
+
 const createSchema = z.object({
   name: z.string().min(1, '项目名称必填').max(60),
+  // v1.8.5 起新建项目必须先选择项目类型
+  projectType: z.string({ required_error: '请选择项目类型' }).refine((v) => normalizeProjectType(v) !== null, PROJECT_TYPE_MSG),
   description: z.string().max(500).optional().default(''),
   status: z.enum(['planning', 'active', 'completed', 'archived']).optional().default('planning'),
   startDate: z.string().nullable().optional().default(null),
@@ -42,6 +47,7 @@ const createSchema = z.object({
 
 const updateSchema = z.object({
   name: z.string().min(1).max(60).optional(),
+  projectType: z.string().refine((v) => normalizeProjectType(v) !== null, PROJECT_TYPE_MSG).optional(),
   description: z.string().max(500).optional(),
   status: z.enum(['planning', 'active', 'completed', 'archived']).optional(),
   startDate: z.string().nullable().optional(),
@@ -64,6 +70,13 @@ router.get('/', (req: AuthRequest, res: Response, next: NextFunction) => {
       list = list.filter((p) => p.members.some((m) => m.userId === user.id) || p.ownerId === user.id)
     }
     res.json({ projects: list })
+  } catch (e) { next(e) }
+})
+
+// 待审批删除项目列表（管理员/项目核算人员）
+router.get('/pending-deletions', requirePermission('project.approve_delete'), (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    res.json({ projects: projectRepo.findPendingDeletions() })
   } catch (e) { next(e) }
 })
 
@@ -101,6 +114,7 @@ router.post('/', (req: AuthRequest, res: Response, next: NextFunction) => {
       name: parsed.data.name,
       description: parsed.data.description,
       status: parsed.data.status as ProjectStatus,
+      projectType: normalizeProjectType(parsed.data.projectType),
       ownerId,
       startDate: parsed.data.startDate,
       dueDate: parsed.data.dueDate,
@@ -173,9 +187,41 @@ router.patch('/:projectId', (req: AuthRequest, res: Response, next: NextFunction
     }
     const parsed = updateSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
-    projectRepo.update(project.id, parsed.data)
+    const { projectType, ...rest } = parsed.data
+    projectRepo.update(project.id, {
+      ...rest,
+      ...(projectType !== undefined ? { projectType: normalizeProjectType(projectType) } : {}),
+    })
     projectRepo.updateProgress(project.id)
     res.json({ project: projectRepo.findById(project.id)! })
+  } catch (e) { next(e) }
+})
+
+// v1.9.0 结项合并：把运维增强项目的台账/课题记录批量转绑到目标运维项目
+router.post('/:projectId/merge', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const source = projectRepo.findById(req.params.projectId)
+    if (!source) throw new ApiError(404, '项目不存在')
+    if (source.deletedAt) throw new ApiError(400, '已删除的项目不能合并')
+    if (source.ownerId !== req.userId && userRepo.findById(req.userId!)?.role !== 'admin') {
+      throw new ApiError(403, '无权合并项目')
+    }
+    if (source.projectType !== '运维增强') {
+      throw new ApiError(400, '仅「运维增强」类型的项目支持合并到运维项目')
+    }
+    if (source.mergedIntoProjectId) throw new ApiError(400, '该项目已合并过，不能重复合并')
+
+    const schema = z.object({ targetProjectId: z.string().min(1, '请选择目标运维项目') })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    if (parsed.data.targetProjectId === source.id) throw new ApiError(400, '不能合并到项目自身')
+    const target = projectRepo.findById(parsed.data.targetProjectId)
+    if (!target || target.deletedAt) throw new ApiError(404, '目标运维项目不存在')
+    if (target.projectType !== '运维项目') throw new ApiError(400, '目标项目必须是「运维项目」类型')
+    if (target.mergedIntoProjectId) throw new ApiError(400, '目标项目已合并到其他项目，不能作为合并目标')
+
+    const result = projectRepo.mergeProject(source.id, target.id)
+    res.json({ ...result, project: projectRepo.findById(source.id)! })
   } catch (e) { next(e) }
 })
 
@@ -510,6 +556,88 @@ router.get('/:projectId/members/import/template', (req: AuthRequest, res: Respon
     }).catch(err => {
       next(err)
     })
+  } catch (e) { next(e) }
+})
+
+// 删除项目：管理员直接删除；项目负责人本人提交删除申请，经管理员/项目核算审批后删除；其他人无权删除
+router.delete('/:projectId', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findByIdWithTrash(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    const user = userRepo.findById(req.userId!)
+    if (project.ownerId !== req.userId && user?.role !== 'admin') {
+      throw new ApiError(403, '仅项目创建者或管理员可以删除项目')
+    }
+    // 管理员直接删除
+    if (user?.role === 'admin') {
+      projectRepo.softDelete(project.id)
+      projectRepo.cancelDeletion(project.id)
+      return res.json({ ok: true })
+    }
+    // 项目负责人本人 → 提交删除申请，等待审批
+    if (project.deleteRequestedBy) {
+      return res.json({ ok: true, pendingApproval: true, message: '删除申请已在审批中，请耐心等待' })
+    }
+    projectRepo.requestDeletion(project.id, req.userId!)
+    res.json({ ok: true, pendingApproval: true, message: '已提交删除申请，等待管理员或项目核算人员审批' })
+  } catch (e) { next(e) }
+})
+
+// 批准删除申请（管理员/项目核算人员）
+router.post('/:projectId/deletion/approve', requirePermission('project.approve_delete'), (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    if (!project.deleteRequestedBy) throw new ApiError(400, '该项目没有待审批的删除申请')
+    projectRepo.softDelete(project.id)
+    projectRepo.cancelDeletion(project.id)
+    // 通知申请人
+    notificationRepo.create({
+      userId: project.deleteRequestedBy,
+      type: 'system',
+      title: `项目「${project.name}」删除申请已批准`,
+      body: '你提交的项目删除申请已获批准，项目及其任务已移入回收站',
+      projectId: project.id,
+    })
+    res.json({ ok: true })
+  } catch (e) { next(e) }
+})
+
+// 驳回删除申请（管理员/项目核算人员），可附驳回原因并通知申请人
+const rejectDeletionSchema = z.object({
+  comment: z.string().max(200, '驳回原因最多 200 字').optional().default(''),
+})
+
+router.post('/:projectId/deletion/reject', requirePermission('project.approve_delete'), (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    if (!project.deleteRequestedBy) throw new ApiError(400, '该项目没有待审批的删除申请')
+    const parsed = rejectDeletionSchema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    projectRepo.rejectDeletion(project.id, parsed.data.comment)
+    // 通知申请人（附驳回原因）
+    notificationRepo.create({
+      userId: project.deleteRequestedBy,
+      type: 'system',
+      title: `项目「${project.name}」删除申请被驳回`,
+      body: parsed.data.comment ? `驳回原因：${parsed.data.comment}` : '管理员或项目核算人员驳回了该项目的删除申请',
+      projectId: project.id,
+    })
+    res.json({ ok: true })
+  } catch (e) { next(e) }
+})
+
+// 恢复已删除项目（级联恢复其下任务）
+router.post('/:projectId/restore', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findByIdWithTrash(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    if (project.ownerId !== req.userId && userRepo.findById(req.userId!)?.role !== 'admin') {
+      throw new ApiError(403, '无权恢复此项目')
+    }
+    projectRepo.restore(project.id)
+    res.json({ ok: true })
   } catch (e) { next(e) }
 })
 

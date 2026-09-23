@@ -14,6 +14,26 @@ export default defineConfig({
     }),
     tsconfigPaths(),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        // recharts 及其 d3 依赖体量较大且仅在统计/报表页使用，拆独立 chunk 避免拖慢首屏
+        manualChunks(id: string) {
+          if (id.includes('node_modules')) {
+            if (
+              id.includes('recharts') ||
+              id.includes('victory-vendor') ||
+              /\/d3-/.test(id) ||
+              id.includes('internmap')
+            ) {
+              return 'vendor-charts'
+            }
+            return 'vendor'
+          }
+        },
+      },
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,

@@ -72,6 +72,11 @@ export default function GlobalSearch() {
   }, [debouncedKeyword])
 
   // 键盘导航
+  const handleSelectTask = useCallback((task: Task) => {
+    setOpen(false)
+    navigate(`/projects/${task.projectId}?taskId=${task.id}`)
+  }, [navigate])
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     const total = tasks.length
     if (e.key === 'ArrowDown') {
@@ -84,12 +89,7 @@ export default function GlobalSearch() {
       e.preventDefault()
       handleSelectTask(tasks[selectedIndex])
     }
-  }, [tasks, selectedIndex])
-
-  const handleSelectTask = (task: Task) => {
-    setOpen(false)
-    navigate(`/projects/${task.projectId}?taskId=${task.id}`)
-  }
+  }, [tasks, selectedIndex, handleSelectTask])
 
   const getProjectName = (projectId: string) => {
     const project = projects.find(p => p.id === projectId)

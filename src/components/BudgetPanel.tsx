@@ -378,7 +378,7 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
               </div>
               {!isFinance && (
                 <div className="rounded-lg bg-warn/10 p-3 text-xs text-warn">
-                  提交后需等待财务人员审批
+                  提交后需等待项目核算人员审批
                 </div>
               )}
             </div>

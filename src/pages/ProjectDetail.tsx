@@ -1,22 +1,30 @@
 // 项目详情页 - 列表/看板/甘特视图切换
 
 import React, { useMemo, useState, useCallback, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import {
   DndContext,
   PointerSensor,
   useSensor,
   useSensors,
-  useDraggable,
   useDroppable,
+  closestCorners,
   type DragEndEvent,
 } from '@dnd-kit/core'
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from '@dnd-kit/sortable'
 import {
   Plus,
   ArrowLeft,
   LayoutGrid,
   List,
   Pencil,
+  GitMerge,
   Trash2,
   CheckSquare,
   X,
@@ -43,10 +51,12 @@ import {
   StatusBadge,
   LabelTag,
 } from '@/components/ui'
-import ProjectDialog, { ProjectStatusBadge } from '@/components/ProjectDialog'
+import ProjectDialog, { ProjectStatusBadge, ProjectTypeBadge } from '@/components/ProjectDialog'
+import { MergeProjectDialog } from '@/components/MergeProjectDialog'
 import TaskDialog from '@/components/TaskDialog'
 import TaskDrawer from '@/components/TaskDrawer'
 import BudgetPanel from '@/components/BudgetPanel'
+import OpLogsPanel from '@/components/OpLogsPanel'
 import GanttChart from '@/components/GanttChart'
 import KanbanColumnDialog from '@/components/KanbanColumnDialog'
 import MemberImportDialog from '@/components/MemberImportDialog'
@@ -54,6 +64,7 @@ import { useAppStore } from '@/stores/app'
 import { fmtDate, dueLabel } from '@/lib/date'
 import { getUserSortOrder } from '@/lib/utils'
 import type { Project, Task, TaskStatus, User, TaskDependency, TaskFilter, SavedFilter, KanbanColumn } from '../../shared/types'
+import { projectLedgerLabel } from '../../shared/types'
 
 const columns: { status: TaskStatus; label: string; accent: string }[] = [
   { status: 'todo', label: '待办', accent: 'text-text-secondary' },
@@ -61,6 +72,31 @@ const columns: { status: TaskStatus; label: string; accent: string }[] = [
   { status: 'review', label: '审核中', accent: 'text-sky-300' },
   { status: 'done', label: '已完成', accent: 'text-ok' },
 ]
+
+// 看板列内排序模式
+type KanbanSortMode = 'manual' | 'due_asc' | 'due_desc' | 'start_asc' | 'start_desc' | 'priority' | 'created_desc'
+const KANBAN_SORT_OPTIONS: { value: KanbanSortMode; label: string }[] = [
+  { value: 'manual', label: '手动排序（可拖拽）' },
+  { value: 'due_asc', label: '截止时间 ↑' },
+  { value: 'due_desc', label: '截止时间 ↓' },
+  { value: 'start_asc', label: '开始时间 ↑' },
+  { value: 'start_desc', label: '开始时间 ↓' },
+  { value: 'priority', label: '优先级 高→低' },
+  { value: 'created_desc', label: '最近创建' },
+]
+
+// 无日期的任务始终排在末尾
+function dateCompare(key: (t: Task) => string | null | undefined, dir: 1 | -1) {
+  return (a: Task, b: Task) => {
+    const av = key(a)
+    const bv = key(b)
+    if (!av && !bv) return 0
+    if (!av) return 1
+    if (!bv) return -1
+    return av.localeCompare(bv) * dir
+  }
+}
+const PRIORITY_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
 
 export default function ProjectDetail() {
   const { projectId = '' } = useParams()
@@ -70,15 +106,19 @@ export default function ProjectDetail() {
   const currentUser = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
 
-  const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('kanban')
+  const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('gantt')
+  const [sortMode, setSortMode] = useState<KanbanSortMode>('manual')
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [presetStatus, setPresetStatus] = useState<TaskStatus>('todo')
   const [projectDialogOpen, setProjectDialogOpen] = useState(false)
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false)
+  const [mergeTargetName, setMergeTargetName] = useState('')
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null)
   const [showBudget, setShowBudget] = useState(false)
+  const [showOpLogs, setShowOpLogs] = useState(false)
   const [taskInitialDates, setTaskInitialDates] = useState<{ startDate?: string; dueDate?: string }>({})
 
   const [selectMode, setSelectMode] = useState(false)
@@ -100,8 +140,8 @@ export default function ProjectDetail() {
   const [memberImportOpen, setMemberImportOpen] = useState(false)
 
   const project: Project | undefined = data.data?.project
-  const tasks: Task[] = data.data?.tasks || []
-  const allUsers: User[] = users.data?.users || []
+  const tasks: Task[] = useMemo(() => data.data?.tasks ?? [], [data.data])
+  const allUsers: User[] = useMemo(() => users.data?.users ?? [], [users.data])
 
   // 检查当前用户是否可以配置看板列
   const canConfigKanban = useMemo(() => {
@@ -113,6 +153,26 @@ export default function ProjectDetail() {
   // 加载项目依赖关系
   const depsData = useAsync(() => api.getProjectDependencies(projectId), [projectId, view])
   const dependencies: TaskDependency[] = depsData.data?.dependencies || []
+
+  // 自动刷新：窗口重新聚焦时立即刷新，页面可见期间每 20s 轮询
+  // 有对话框/抽屉打开时暂停，避免打断用户操作
+  const hasBlockingUI = taskDialogOpen || projectDialogOpen || drawerTaskId !== null || showSaveDialog || memberImportOpen
+  const { reload: reloadProjectData } = data
+  useEffect(() => {
+    if (!projectId) return
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return
+      if (hasBlockingUI) return
+      reloadProjectData()
+    }
+    const onFocus = () => refresh()
+    window.addEventListener('focus', onFocus)
+    const timer = window.setInterval(refresh, 20000)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      window.clearInterval(timer)
+    }
+  }, [projectId, hasBlockingUI, reloadProjectData])
 
   // 加载筛选方案
   useEffect(() => {
@@ -226,8 +286,20 @@ export default function ProjectDetail() {
         }
       }
     })
+    // 列内排序
+    const comparators: Record<KanbanSortMode, (a: Task, b: Task) => number> = {
+      manual: (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.createdAt.localeCompare(b.createdAt),
+      due_asc: dateCompare((t) => t.dueDate, 1),
+      due_desc: dateCompare((t) => t.dueDate, -1),
+      start_asc: dateCompare((t) => t.startDate ?? null, 1),
+      start_desc: dateCompare((t) => t.startDate ?? null, -1),
+      priority: (a, b) => (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9),
+      created_desc: (a, b) => b.createdAt.localeCompare(a.createdAt),
+    }
+    const cmp = comparators[sortMode]
+    Object.keys(map).forEach((k) => map[k].sort(cmp))
     return map
-  }, [tasks, kanbanColumns])
+  }, [tasks, kanbanColumns, sortMode])
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -236,18 +308,46 @@ export default function ProjectDetail() {
   const handleDragEnd = useCallback(async (e: DragEndEvent) => {
     const { active, over } = e
     if (!over) return
-    const taskId = String(active.id)
-    const newStatus = String(over.id) as TaskStatus
-    const t = tasks.find((x) => x.id === taskId)
-    if (!t || t.status === newStatus) return
+    const activeId = String(active.id)
+    const overId = String(over.id)
+    if (activeId === overId) return
+    const t = tasks.find((x) => x.id === activeId)
+    if (!t) return
+    // over 是列空白区（droppable id = statusKey）还是另一张卡片
+    const overTask = tasks.find((x) => x.id === overId)
+    const keyOf = (task: Task) => task.customStatus || task.status
     try {
-      await api.updateTaskStatus(taskId, newStatus)
-      notify('success', '状态已更新')
+      if (!overTask) {
+        // 拖到列空白处 → 状态变更，排到该列末尾（新建时 sort_order 已是最大）
+        const newStatus = overId as TaskStatus
+        if (t.status === newStatus) return
+        await api.updateTaskStatus(activeId, newStatus)
+        notify('success', '状态已更新')
+      } else if (keyOf(t) === keyOf(overTask)) {
+        // 同列内拖拽 → 持久化新顺序（仅手动排序模式）
+        if (sortMode !== 'manual') return
+        const ids = (grouped[keyOf(t)] || []).map((x) => x.id)
+        if (!ids.includes(overId)) return
+        const next = arrayMove(ids, ids.indexOf(activeId), ids.indexOf(overId))
+        await api.reorderTasks(next)
+        notify('success', '顺序已保存')
+      } else {
+        // 跨列拖到卡片上 → 改状态并插入到落点位置
+        const targetKey = keyOf(overTask)
+        const targetIds = (grouped[targetKey] || []).map((x) => x.id)
+        const idx = targetIds.indexOf(overId)
+        const next = targetIds.includes(activeId)
+          ? arrayMove(targetIds, targetIds.indexOf(activeId), idx)
+          : [...targetIds.slice(0, idx), activeId, ...targetIds.slice(idx)]
+        await api.updateTaskStatus(activeId, overTask.status)
+        if (sortMode === 'manual') await api.reorderTasks(next)
+        notify('success', '状态已更新')
+      }
       data.reload()
-    } catch (e) {
-      notify('error', getErrorMessage(e, '更新失败'))
+    } catch (err) {
+      notify('error', getErrorMessage(err, '操作失败'))
     }
-  }, [tasks, notify, data])
+  }, [tasks, grouped, sortMode, notify, data])
 
   const openCreate = useCallback((status: TaskStatus = 'todo') => {
     setEditingTask(null)
@@ -473,9 +573,9 @@ export default function ProjectDetail() {
     setDrawerTaskId(task.id)
   }, [])
 
-  const handleTaskSaved = useCallback(() => {
+  const handleTaskSaved = useCallback(async () => {
     notify('success', editingTask ? '任务已更新' : '任务已创建')
-    data.reload()
+    await data.reload()
   }, [editingTask, notify, data])
 
   if (data.loading && !project) {
@@ -504,6 +604,12 @@ export default function ProjectDetail() {
           </Link>
           <div className="flex items-center gap-3">
             <h2 className="font-display text-2xl text-text-primary">{project.name}</h2>
+            <ProjectTypeBadge type={project.projectType} />
+            {project.mergedIntoProjectId && (
+              <span className="rounded-md bg-teal-500/15 px-2 py-0.5 text-xs font-medium text-teal-400">
+                已合并{mergeTargetName ? ` → ${mergeTargetName}` : ''}
+              </span>
+            )}
             <ProjectStatusBadge status={project.status} />
           </div>
           <p className="mt-1 text-sm text-muted">
@@ -544,6 +650,12 @@ export default function ProjectDetail() {
           <Button variant="ghost" size="sm" onClick={() => setProjectDialogOpen(true)}>
             <Pencil className="h-3.5 w-3.5" /> 编辑项目
           </Button>
+          {project.projectType === '运维增强' && !project.mergedIntoProjectId && currentUser
+            && (currentUser.role === 'admin' || currentUser.id === project.ownerId) && (
+            <Button variant="ghost" size="sm" onClick={() => setMergeDialogOpen(true)}>
+              <GitMerge className="h-3.5 w-3.5" /> 合并到运维项目
+            </Button>
+          )}
           {view === 'kanban' && (
             <Button variant="ghost" size="sm" onClick={() => setKanbanColumnDialogOpen(true)}>
               <Settings2 className="h-3.5 w-3.5" /> 配置看板
@@ -557,6 +669,9 @@ export default function ProjectDetail() {
           </Button>
           <Button variant="ghost" size="sm" onClick={() => setShowBudget(!showBudget)}>
             预算
+          </Button>
+          <Button variant={showOpLogs ? 'primary' : 'ghost'} size="sm" onClick={() => setShowOpLogs(!showOpLogs)}>
+            {projectLedgerLabel(project.projectType)}
           </Button>
         </div>
       </div>
@@ -608,6 +723,18 @@ export default function ProjectDetail() {
                 </button>
               ))}
             </div>
+          )}
+          {view === 'kanban' && (
+            <select
+              value={sortMode}
+              onChange={(e) => setSortMode(e.target.value as KanbanSortMode)}
+              className="h-8 rounded-lg border border-bg-border bg-bg-panel px-2 text-xs text-text-secondary outline-none transition focus:border-brand/50"
+              title="看板列内排序方式"
+            >
+              {KANBAN_SORT_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
           )}
           <div className="flex gap-1 rounded-lg bg-bg-soft p-1">
             <button
@@ -906,7 +1033,7 @@ export default function ProjectDetail() {
       )}
 
       {/* 保存筛选方案对话框 */}
-      {showSaveDialog && (
+      {showSaveDialog && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="w-full max-w-md rounded-xl bg-bg-panel p-6 shadow-lg">
             <h3 className="mb-4 text-lg font-medium text-text-primary">保存筛选方案</h3>
@@ -925,7 +1052,8 @@ export default function ProjectDetail() {
               </Button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {/* 批量操作工具栏 */}
@@ -971,6 +1099,14 @@ export default function ProjectDetail() {
 
       {/* 内容 */}
       {showBudget && <BudgetPanel projectId={projectId} />}
+      {showOpLogs && (
+        <div className="mb-4 rounded-2xl border border-bg-border bg-bg-panel/40 p-4">
+          <h3 className="mb-3 text-sm font-medium text-text-secondary">
+            {projectLedgerLabel(project.projectType)}（本项目）
+          </h3>
+          <OpLogsPanel projectId={projectId} />
+        </div>
+      )}
 
       <div key={view} className="animate-fade-up">
       {view === 'list' ? (
@@ -1007,7 +1143,7 @@ export default function ProjectDetail() {
               </thead>
               <tbody className="divide-y divide-bg-border">
                 {filtered.map((t) => {
-                  const dl = dueLabel(t.dueDate)
+                  const dl = dueLabel(t.dueDate, t.status === 'done')
                   const isSelected = selectedIds.has(t.id)
                   return (
                     <tr
@@ -1094,7 +1230,7 @@ export default function ProjectDetail() {
           </div>
         )
       ) : (
-        <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {(kanbanColumns.length > 0 ? kanbanColumns : columns).map((col) => {
               const statusKey = 'statusKey' in col ? col.statusKey : col.status
@@ -1113,15 +1249,18 @@ export default function ProjectDetail() {
                   showConfigButton={canConfigKanban}
                   onConfig={() => setKanbanColumnDialogOpen(true)}
                 >
-                  {list.map((t) => (
-                    <KanbanCard
-                      key={t.id}
-                      task={t}
-                      onOpen={() => setDrawerTaskId(t.id)}
-                      onEdit={() => openEdit(t)}
-                      onDelete={() => deleteTask(t)}
-                    />
-                  ))}
+                  <SortableContext items={list.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                    {list.map((t) => (
+                      <KanbanCard
+                        key={t.id}
+                        task={t}
+                        statusKey={statusKey}
+                        onOpen={() => setDrawerTaskId(t.id)}
+                        onEdit={() => openEdit(t)}
+                        onDelete={() => deleteTask(t)}
+                      />
+                    ))}
+                  </SortableContext>
                   {list.length === 0 && (
                     <div className="rounded-xl border border-dashed border-bg-border px-3 py-6 text-center text-xs text-muted">
                       暂无
@@ -1165,7 +1304,19 @@ export default function ProjectDetail() {
           name: project.name,
           description: project.description,
           status: project.status,
+          projectType: project.projectType || undefined,
           dueDate: project.dueDate || '',
+        }}
+      />
+      <MergeProjectDialog
+        open={mergeDialogOpen}
+        onClose={() => setMergeDialogOpen(false)}
+        sourceProject={project}
+        onSuccess={(_updated, moved, targetName) => {
+          setMergeDialogOpen(false)
+          setMergeTargetName(targetName)
+          notify('success', `已合并到「${targetName}」，${moved} 条台账/课题记录完成转绑`)
+          data.reload()
         }}
       />
       <TaskDialog
@@ -1279,22 +1430,25 @@ function KanbanColumn({
 // ===== 看板卡片 =====
 function KanbanCard({
   task,
+  statusKey,
   onOpen,
   onEdit,
   onDelete,
 }: {
   task: Task
+  statusKey: string
   onOpen: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
+    data: { status: statusKey },
   })
   const style = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
+    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)`, transition }
     : undefined
-  const dl = dueLabel(task.dueDate)
+  const dl = dueLabel(task.dueDate, task.status === 'done')
   return (
     <div
       ref={setNodeRef}

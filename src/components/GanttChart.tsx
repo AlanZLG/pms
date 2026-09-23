@@ -4,11 +4,12 @@ import type { Task, TaskDependency, TaskStatus } from '../../shared/types'
 import { STATUS_META } from '@/lib/constants'
 import { useDebounce } from '@/hooks/useDebounce'
 import DependencyDialog from './DependencyDialog'
+import GanttTaskEditPanel from './GanttTaskEditPanel'
 
 interface GanttChartProps {
   tasks: Task[]
   dependencies?: TaskDependency[]
-  onTaskUpdate?: (taskId: string, data: { startDate?: string; dueDate?: string; progress?: number }) => void
+  onTaskUpdate?: (taskId: string, data: { startDate?: string; dueDate?: string; progress?: number; actualStartDate?: string | null; actualEndDate?: string | null }) => void
   onAddDependency?: (taskId: string, dependsOnTaskId: string, type: 'fs' | 'ss' | 'ff' | 'sf', lagDays?: number) => void
   onUpdateDependency?: (depId: string, type: 'fs' | 'ss' | 'ff' | 'sf', lagDays: number) => void
   onRemoveDependency?: (depId: string) => void
@@ -65,6 +66,8 @@ export default function GanttChart({
   const [dragging, setDragging] = useState<{ taskId: string; type: 'move' | 'resize-left' | 'resize-right' | 'progress'; startX: number; startDate: string; dueDate: string; currentStartDate: string; currentDueDate: string; progress?: number; currentProgress?: number } | null>(null)
   const [linking, setLinking] = useState<{ fromTaskId: string; mouseX: number; mouseY: number } | null>(null)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  // 点击左侧任务名称弹出的行内编辑面板
+  const [editPanelTask, setEditPanelTask] = useState<Task | null>(null)
 
   // 依赖对话框状态
   const [depDialogOpen, setDepDialogOpen] = useState(false)
@@ -106,8 +109,8 @@ export default function GanttChart({
   const scrollToToday = useCallback(() => {
     if (scrollRef.current) {
       const today = new Date()
-      const dayOffset = daysBetween(minDateRef.current || today, today)
-      scrollRef.current.scrollTo({ left: dayOffset * dayWidth, behavior: 'smooth' })
+      const offset = dayOffset(minDateRef.current || today, today)
+      scrollRef.current.scrollTo({ left: offset * dayWidth, behavior: 'smooth' })
     }
   }, [dayWidth])
 
@@ -117,6 +120,8 @@ export default function GanttChart({
     const dates = tasks.flatMap((t) => [
       t.startDate ? new Date(t.startDate) : null,
       t.dueDate ? new Date(t.dueDate) : null,
+      t.actualStartDate ? new Date(t.actualStartDate) : null,
+      t.actualEndDate ? new Date(t.actualEndDate) : null,
     ]).filter(Boolean) as Date[]
 
     if (dates.length === 0) {
@@ -124,7 +129,7 @@ export default function GanttChart({
       return {
         minDate: startOfWeek(today),
         maxDate: endOfMonth(today),
-        totalDays: daysBetween(startOfWeek(today), endOfMonth(today)),
+        totalDays: dayOffset(startOfWeek(today), endOfMonth(today)) + 1,
       }
     }
 
@@ -134,7 +139,8 @@ export default function GanttChart({
     min = startOfWeek(min)
     max = addDays(endOfWeek(max), 7)
 
-    return { minDate: min, maxDate: max, totalDays: daysBetween(min, max) }
+    // 闭区间：首尾两天都计入轴长，否则末尾日期会被裁掉一格
+    return { minDate: min, maxDate: max, totalDays: dayOffset(min, max) + 1 }
   }, [tasks])
 
   // Auto-scroll to put today at the leftmost position
@@ -142,8 +148,8 @@ export default function GanttChart({
     minDateRef.current = minDate
     if (scrollRef.current) {
       const today = new Date()
-      const dayOffset = daysBetween(minDate, today)
-      scrollRef.current.scrollTo({ left: dayOffset * dayWidth, behavior: 'auto' })
+      const offset = dayOffset(minDate, today)
+      scrollRef.current.scrollTo({ left: offset * dayWidth, behavior: 'auto' })
     }
   }, [minDate, dayWidth])
 
@@ -161,7 +167,7 @@ export default function GanttChart({
 
   const dateToX = useCallback(
     (date: Date) => {
-      const dayDiff = daysBetween(minDate, date)
+      const dayDiff = dayOffset(minDate, date)
       return dayDiff * dayWidth
     },
     [minDate, dayWidth],
@@ -246,7 +252,8 @@ export default function GanttChart({
       const { taskId, type, currentStartDate, currentDueDate, startDate, dueDate, currentProgress } = dragging
       const hasChanged = currentStartDate !== startDate || currentDueDate !== dueDate
       if (type === 'progress' && currentProgress !== undefined) {
-        onTaskUpdate?.(taskId, { progress: currentProgress })
+        // 统一按 0-100 持久化（与后端 schema、详情抽屉一致）
+        onTaskUpdate?.(taskId, { progress: Math.round(currentProgress * 100) })
       } else if (hasChanged) {
         if (type === 'move') {
           onTaskUpdate?.(taskId, { startDate: currentStartDate, dueDate: currentDueDate })
@@ -453,7 +460,7 @@ export default function GanttChart({
     const topPadding = startRow * ROW_HEIGHT
     const bottomPadding = (taskCount - endRow) * ROW_HEIGHT
     return { visibleSlice, topPadding, bottomPadding, startRow }
-  }, [groupByAssignee, swimlaneGroups, filteredTasks, scrollTop, viewportHeight, totalGroupHeaders])
+  }, [groupByAssignee, swimlaneGroups, filteredTasks, scrollTop, viewportHeight])
 
   const toggleGroup = useCallback((assigneeId: string) => {
     setCollapsedGroups((prev) => {
@@ -474,7 +481,7 @@ export default function GanttChart({
   }, [tasks])
 
   const taskPositions = useMemo(() => {
-    const positions: Record<string, { left: number; width: number; hasDates: boolean }> = {}
+    const positions: Record<string, { left: number; width: number; hasDates: boolean; hasActual: boolean; aLeft: number; aWidth: number }> = {}
     filteredTasks.forEach((task) => {
       const isDraggingThis = dragging?.taskId === task.id
       const effectiveStart = isDraggingThis && dragging
@@ -487,8 +494,22 @@ export default function GanttChart({
       const start = effectiveStart ? new Date(effectiveStart) : new Date()
       const end = effectiveDue ? new Date(effectiveDue) : addDays(start, 7)
       const left = dateToX(start)
-      const width = Math.max(dayWidth, dateToX(end) - left)
-      positions[task.id] = { left, width, hasDates }
+      // 闭区间：色块覆盖开始日到截止日当天（含首尾），宽度 = 跨度 + 1 格
+      const width = Math.max(dayWidth, dateToX(end) - left + dayWidth)
+      // 实际条位置：填了实际开始/实际截止任一字段即渲染对比条；
+      // 未填实际截止则延伸到今天（表示进行中的实际进度）
+      const hasActual = !!(task.actualStartDate || task.actualEndDate)
+      let aLeft = left
+      let aWidth = 0
+      if (hasActual) {
+        const aStart = task.actualStartDate
+          ? new Date(task.actualStartDate)
+          : (task.startDate ? new Date(task.startDate) : new Date())
+        const aEnd = task.actualEndDate ? new Date(task.actualEndDate) : new Date()
+        aLeft = dateToX(aStart)
+        aWidth = Math.max(dayWidth, dateToX(aEnd) - aLeft + dayWidth)
+      }
+      positions[task.id] = { left, width, hasDates, hasActual, aLeft, aWidth }
     })
     return positions
   }, [filteredTasks, dateToX, dayWidth, dragging])
@@ -860,7 +881,7 @@ export default function GanttChart({
                             selectedTaskId === task.id ? 'bg-brand/20' : 'hover:bg-bg-hover'
                           } ${overdue ? 'border-l-2 border-l-red-500' : ''}`}
                           style={{ height: ROW_HEIGHT, paddingLeft: 24 }}
-                          onClick={() => { setSelectedTaskId(task.id); onTaskClick?.(task) }}
+                          onClick={() => { setSelectedTaskId(task.id); setEditPanelTask(task) }}
                         >
                           {isMilestone(task) ? (
                             <Diamond className="w-3 h-3 text-purple-400 mr-2 flex-shrink-0" />
@@ -895,7 +916,7 @@ export default function GanttChart({
                     selectedTaskId === task.id ? 'bg-brand/20' : 'hover:bg-bg-hover'
                   } ${overdue ? 'border-l-2 border-l-red-500' : ''}`}
                   style={{ height: ROW_HEIGHT }}
-                  onClick={() => { setSelectedTaskId(task.id); onTaskClick?.(task) }}
+                  onClick={() => { setSelectedTaskId(task.id); setEditPanelTask(task) }}
                 >
                   {isMilestone(task) ? (
                     <Diamond className="w-3 h-3 text-purple-400 mr-2 flex-shrink-0" />
@@ -1017,7 +1038,9 @@ export default function GanttChart({
                 if (!pos) return null
                 const overdue = isOverdue(task)
                 const isCritical = criticalPathIds.has(task.id)
-                const baseProgress = task.progress ?? (task.status === 'done' ? 1 : task.status === 'in_progress' ? 0.5 : 0)
+                const rawProgress = task.progress ?? (task.status === 'done' ? 1 : task.status === 'in_progress' ? 0.5 : 0)
+                // 兼容两套历史口径：库中 0-100、旧拖拽值 0-1
+                const baseProgress = rawProgress > 1 ? rawProgress / 100 : rawProgress
                 const progress = dragging?.taskId === task.id && dragging?.type === 'progress'
                   ? (dragging.currentProgress ?? baseProgress)
                   : baseProgress
@@ -1083,7 +1106,7 @@ export default function GanttChart({
                         <div
                           className={`w-full h-full mx-1 rounded-md ${STATUS_META[task.status].tailwind} cursor-move shadow-sm overflow-hidden relative flex items-center transition-all ${
                             !hasDates ? 'opacity-50 border-2 border-dashed border-text-primary/30' : ''
-                          } ${isDraggingThis ? 'ring-2 ring-white shadow-lg' : ''} ${overdue ? 'ring-2 ring-red-500 ring-offset-1 ring-offset-transparent animate-pulse' : ''} ${isCritical ? 'shadow-[0_0_8px_rgba(245,158,11,0.5)]' : ''}`}
+                          } ${pos.hasActual ? 'opacity-45 border border-dashed border-white/40' : ''} ${isDraggingThis ? 'ring-2 ring-white shadow-lg' : ''} ${overdue ? 'ring-2 ring-red-500 ring-offset-1 ring-offset-transparent animate-pulse' : ''} ${isCritical ? 'shadow-[0_0_8px_rgba(245,158,11,0.5)]' : ''}`}
                           onMouseDown={(e) => handleMouseDown(e, task, 'move')}
                         >
                           {/* 移动端拖拽手柄 grip */}
@@ -1136,6 +1159,21 @@ export default function GanttChart({
                           className="absolute right-0 top-0 bottom-0 w-5 md:w-2 cursor-col-resize opacity-60 md:opacity-0 md:group-hover:opacity-100 bg-text-primary/20 hover:bg-text-primary/40 transition-opacity z-10"
                           onMouseDown={(e) => handleMouseDown(e, task, 'resize-right')}
                         />
+                        {/* 实际条：填了实际开始/截止后显示计划 vs 实际对比（绿色实心，不参与拖拽） */}
+                        {pos.hasActual && (
+                          <div
+                            className="absolute pointer-events-none"
+                            style={{ left: pos.aLeft - pos.left, width: pos.aWidth, top: 35, height: 8 }}
+                          >
+                            <div className={`h-full rounded-full bg-emerald-500 shadow-sm ${overdue ? 'ring-1 ring-red-400' : ''}`} />
+                          </div>
+                        )}
+                        {/* 进度数值：常显在色块右侧 */}
+                        {showLabel && (
+                          <span className="absolute left-full ml-1.5 top-1/2 -translate-y-1/2 text-[10px] font-mono text-muted pointer-events-none whitespace-nowrap">
+                            {Math.round(progress * 100)}%
+                          </span>
+                        )}
                         <div className="absolute left-0 -top-8 hidden group-hover:block bg-bg-panel text-text-primary text-xs px-2 py-1 rounded shadow-lg whitespace-nowrap z-30 pointer-events-none">
                           {!hasDates && '⚠ 请设置时间: '}{task.title}
                           {overdue && ' · 已逾期'}
@@ -1371,6 +1409,18 @@ export default function GanttChart({
           <Diamond className="w-3 h-3 text-purple-400" />
           <span className="text-xs text-muted">里程碑</span>
         </div>
+        {tasks.some((t) => t.actualStartDate || t.actualEndDate) && (
+          <>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded border border-dashed border-white/50 bg-brand/30" />
+              <span className="text-xs text-muted">计划（虚线半透明）</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-3 rounded-full bg-emerald-500" />
+              <span className="text-xs text-muted">实际</span>
+            </div>
+          </>
+        )}
         <div className="flex items-center gap-1.5">
           <div className="w-3 h-3 rounded bg-red-500 animate-pulse" />
           <span className="text-xs text-muted">逾期</span>
@@ -1432,6 +1482,16 @@ export default function GanttChart({
         onSave={handleDependencySave}
         onDelete={handleDependencyDelete}
       />
+
+      {/* 甘特图行内快速编辑面板（点击左侧任务名称弹出） */}
+      {editPanelTask && (
+        <GanttTaskEditPanel
+          task={editPanelTask}
+          onClose={() => setEditPanelTask(null)}
+          onSave={async (data) => { await onTaskUpdate?.(editPanelTask.id, data) }}
+          onOpenDetail={(t) => { setEditPanelTask(null); onTaskClick?.(t) }}
+        />
+      )}
     </div>
   )
 }
@@ -1449,9 +1509,14 @@ function addDays(date: Date, days: number): Date {
   const d = new Date(date); d.setDate(d.getDate() + days); return d
 }
 function daysBetween(start: Date, end: Date): number {
+  return Math.max(1, dayOffset(start, end))
+}
+// 纯日期偏移（同一天=0）：用于格子定位。daysBetween 是"工期"语义（至少 1 天），
+// 两者不能混用——混用会让色块从开始日期的第二天起显示。
+function dayOffset(start: Date, end: Date): number {
   const s = new Date(start); s.setHours(0, 0, 0, 0)
   const e = new Date(end); e.setHours(0, 0, 0, 0)
-  return Math.max(1, Math.round((e.getTime() - s.getTime()) / 86400000))
+  return Math.round((e.getTime() - s.getTime()) / 86400000)
 }
 function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()

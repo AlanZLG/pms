@@ -61,7 +61,7 @@ export default function Dashboard() {
     overview.data?.tasksByStatus.review +
     overview.data?.tasksByStatus.done || 0
 
-  const projectList = projects.data?.projects || []
+  const projectList: Project[] = useMemo(() => projects.data?.projects ?? [], [projects.data])
   const sortedProjects = useMemo(() => {
     return [...projectList].sort((a, b) => {
       return PROJECT_STATUS_ORDER[a.status] - PROJECT_STATUS_ORDER[b.status]
@@ -279,7 +279,7 @@ export default function Dashboard() {
         ) : tasks.data && tasks.data.length > 0 ? (
           <ul className="divide-y divide-bg-border">
             {tasks.data.slice(0, 8).map((t) => {
-              const due = dueLabel(t.dueDate)
+              const due = dueLabel(t.dueDate, t.status === 'done')
               return (
                 <Link
                   key={t.id}
@@ -341,7 +341,7 @@ function StatCard({
 
 function ProjectProgressCard({ project }: { project: Project }) {
   const status = PROJECT_STATUS_META[project.status]
-  const due = dueLabel(project.dueDate)
+  const due = dueLabel(project.dueDate, project.status === 'completed')
 
   return (
     <Link to={`/projects/${project.id}`} className="group">

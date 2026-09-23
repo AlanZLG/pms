@@ -1,16 +1,16 @@
 // Toast 通知提示
 
 import { useAppStore } from '@/stores/app'
-import { CheckCircle2, Info, XCircle, X } from 'lucide-react'
+import { CheckCircle2, Info, XCircle, AlertTriangle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export default function Toaster() {
   const toast = useAppStore((s) => s.toast)
   const dismiss = useAppStore((s) => s.dismissToast)
   if (!toast) return null
-  const Icon = toast.type === 'success' ? CheckCircle2 : toast.type === 'error' ? XCircle : Info
+  const Icon = toast.type === 'success' ? CheckCircle2 : toast.type === 'error' ? XCircle : toast.type === 'warning' ? AlertTriangle : Info
   const color =
-    toast.type === 'success' ? 'text-ok' : toast.type === 'error' ? 'text-danger' : 'text-brand-soft'
+    toast.type === 'success' ? 'text-ok' : toast.type === 'error' ? 'text-danger' : toast.type === 'warning' ? 'text-amber-500' : 'text-brand-soft'
   const handleUndo = () => {
     toast.onUndo?.()
     dismiss()

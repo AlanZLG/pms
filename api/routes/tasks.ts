@@ -7,6 +7,7 @@
 import { Router, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
 import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo, attachmentRepo, dependencyRepo, historyRepo, savedFilterRepo, type AuditRow } from '../repository/repo.ts'
+import db from '../db.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import { sendMail, taskCompleteEmail } from '../lib/mail.ts'
@@ -75,6 +76,8 @@ const updateSchema = z.object({
   labels: z.array(z.string()).optional(),
   startDate: z.string().nullable().optional(),
   dueDate: z.string().nullable().optional(),
+  actualStartDate: z.string().nullable().optional(),
+  actualEndDate: z.string().nullable().optional(),
   plannedHours: z.number().optional().nullable(),
   progress: z.number().min(0).max(100).optional(),
 })
@@ -187,6 +190,14 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
     const prevAssignee = task.assigneeId
     const prevStatus = task.status
     taskRepo.update(task.id, parsed.data)
+    // 任务标记完成 → 自动完成所有子任务
+    if (parsed.data.status === 'done' && prevStatus !== 'done') {
+      subtaskRepo.markAllDone(task.id)
+    }
+    // 状态变化 → 按完成情况重算任务进度（done=100/todo=0/有子任务按比例）
+    if (parsed.data.status !== undefined && parsed.data.status !== prevStatus) {
+      taskRepo.recalcProgress(task.id)
+    }
     projectRepo.updateProgress(task.projectId)
     const updated = taskRepo.findById(task.id)!
     // 记录操作历史
@@ -265,6 +276,12 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     const from = task.status
     taskRepo.updateStatus(task.id, parsed.data.status as TaskStatus)
+    // 任务标记完成 → 自动完成所有子任务
+    if (parsed.data.status === 'done' && from !== 'done') {
+      subtaskRepo.markAllDone(task.id)
+    }
+    // 状态变化 → 按完成情况重算任务进度
+    taskRepo.recalcProgress(task.id)
     projectRepo.updateProgress(task.projectId)
     // 记录状态流转
     if (req.userId && from !== parsed.data.status) {
@@ -304,6 +321,20 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
       }
     }
     res.json({ task: taskRepo.findById(task.id)! })
+  } catch (e) { next(e) }
+})
+
+// 列内排序持久化：按传入的 taskIds 顺序写入 sort_order
+router.post('/tasks/reorder', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const schema = z.object({ taskIds: z.array(z.string()).min(1, '任务列表不能为空') })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    // 校验任务都存在
+    const found = parsed.data.taskIds.filter((id) => taskRepo.findById(id))
+    if (found.length === 0) throw new ApiError(404, '任务不存在')
+    taskRepo.reorder(found)
+    res.json({ ok: true, count: found.length })
   } catch (e) { next(e) }
 })
 
@@ -354,7 +385,8 @@ router.get('/trash', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const projectId = req.query.projectId as string | undefined
     const tasks = taskRepo.findTrash(projectId)
-    res.json({ tasks })
+    const projects = projectRepo.findTrash()
+    res.json({ tasks, projects })
   } catch (e) { next(e) }
 })
 
@@ -413,29 +445,100 @@ router.post('/tasks/:taskId/subtasks', (req: AuthRequest, res: Response, next: N
   try {
     const task = taskRepo.findById(req.params.taskId)
     if (!task) throw new ApiError(404, '任务不存在')
-    const schema = z.object({ title: z.string().min(1, '子任务不能为空').max(200) })
+    const schema = z.object({
+      title: z.string().min(1, '子任务不能为空').max(200),
+      assigneeId: z.string().nullable().optional(),
+    })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
-    const subtask = subtaskRepo.create(task.id, parsed.data.title)
+    if (parsed.data.assigneeId && !userRepo.findById(parsed.data.assigneeId)) {
+      throw new ApiError(400, '子任务负责人不存在')
+    }
+    const subtask = subtaskRepo.create(task.id, parsed.data.title, parsed.data.assigneeId || null)
+    // 子任务变化 → 重算任务进度与项目进度
+    taskRepo.recalcProgress(task.id)
+    projectRepo.updateProgress(task.projectId)
     if (req.userId) {
       try { commentRepo.create(task.id, req.userId, `— 新增子任务:${parsed.data.title} —`) } catch {
         // 忽略子任务评论创建失败
+      }
+    }
+    // 子任务指派通知
+    if (subtask.assigneeId && subtask.assigneeId !== req.userId) {
+      try {
+        notificationRepo.create({
+          userId: subtask.assigneeId,
+          type: 'assign',
+          title: '你被指派到子任务',
+          body: `「${subtask.title}」（任务: ${task.title}）`,
+          taskId: task.id,
+          projectId: task.projectId,
+        })
+        pushFeishuNotification(subtask.assigneeId, 'assign', '你被指派到子任务', `「${subtask.title}」`)
+      } catch {
+        // 忽略指派通知发送失败
       }
     }
     res.status(201).json({ subtask })
   } catch (e) { next(e) }
 })
 
-// 更新子任务(标题/完成状态)
+// 更新子任务(标题/完成状态/负责人)
 router.patch('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const schema = z.object({
       title: z.string().min(1).max(200).optional(),
       done: z.boolean().optional(),
+      assigneeId: z.string().nullable().optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    if (parsed.data.assigneeId && !userRepo.findById(parsed.data.assigneeId)) {
+      throw new ApiError(400, '子任务负责人不存在')
+    }
+    // 通过 id 找到子任务所属任务（用于进度联动）
+    const task = findTaskBySubtaskId(req.params.subtaskId)
+    const prevSubtask = task ? subtaskRepo.findByTask(task.id).find((s) => s.id === req.params.subtaskId) : undefined
     subtaskRepo.update(req.params.subtaskId, parsed.data)
+    if (task) {
+      // 子任务变化 → 重算任务进度与项目进度
+      const subs = subtaskRepo.findByTask(task.id)
+      const currentTask = taskRepo.findById(task.id)!
+      // 所有子任务完成 → 自动将任务标记为已完成
+      if (subs.length > 0 && subs.every((s) => s.done) && currentTask.status !== 'done') {
+        taskRepo.updateStatus(task.id, 'done')
+      }
+      // 有子任务未完成但任务是 done → 回退为进行中
+      if (subs.length > 0 && !subs.every((s) => s.done) && currentTask.status === 'done') {
+        taskRepo.updateStatus(task.id, 'in_progress')
+      }
+      taskRepo.recalcProgress(task.id)
+      projectRepo.updateProgress(task.projectId)
+      // 记录操作历史
+      if (parsed.data.done !== undefined && prevSubtask && parsed.data.done !== prevSubtask.done) {
+        historyRepo.create(task.id, req.userId, 'progress_update', `子任务「${prevSubtask.title}」${parsed.data.done ? '完成' : '取消完成'}`)
+      }
+      if (parsed.data.assigneeId !== undefined && prevSubtask && parsed.data.assigneeId !== (prevSubtask.assigneeId || null)) {
+        historyRepo.create(task.id, req.userId, 'assignee_change', `子任务「${prevSubtask.title}」负责人: ${prevSubtask.assigneeId || '未分配'} → ${parsed.data.assigneeId || '未分配'}`)
+        // 子任务指派通知
+        const newAssignee = parsed.data.assigneeId as string | null
+        if (newAssignee && newAssignee !== req.userId) {
+          try {
+            notificationRepo.create({
+              userId: newAssignee,
+              type: 'assign',
+              title: '你被指派到子任务',
+              body: `「${prevSubtask.title}」（任务: ${task.title}）`,
+              taskId: task.id,
+              projectId: task.projectId,
+            })
+            pushFeishuNotification(newAssignee, 'assign', '你被指派到子任务', `「${prevSubtask.title}」`)
+          } catch {
+            // 忽略指派通知发送失败
+          }
+        }
+      }
+    }
     res.json({ ok: true })
   } catch (e) { next(e) }
 })
@@ -443,7 +546,31 @@ router.patch('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: Nex
 // 删除子任务
 router.delete('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+    const task = findTaskBySubtaskId(req.params.subtaskId)
     subtaskRepo.delete(req.params.subtaskId)
+    if (task) {
+      // 子任务变化 → 重算任务进度与项目进度
+      taskRepo.recalcProgress(task.id)
+      projectRepo.updateProgress(task.projectId)
+    }
+    res.json({ ok: true })
+  } catch (e) { next(e) }
+})
+
+// 子任务批量重排（拖拽排序）
+router.post('/tasks/:taskId/subtasks/reorder', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const task = taskRepo.findById(req.params.taskId)
+    if (!task) throw new ApiError(404, '任务不存在')
+    const schema = z.object({ ids: z.array(z.string()).min(1) })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    // 校验全部 id 都属于该任务，防止误写他任务排序
+    const belongIds = new Set(subtaskRepo.findByTask(task.id).map((s) => s.id))
+    if (!parsed.data.ids.every((id) => belongIds.has(id))) {
+      throw new ApiError(400, '子任务列表与任务不匹配')
+    }
+    subtaskRepo.reorder(task.id, parsed.data.ids)
     res.json({ ok: true })
   } catch (e) { next(e) }
 })
@@ -604,4 +731,10 @@ function parseMentions(content: string): string[] {
     names.add(match[1])
   }
   return [...names]
+}
+
+/** 通过子任务 id 反查所属任务 */
+function findTaskBySubtaskId(subtaskId: string) {
+  const row = db.prepare('SELECT task_id FROM subtasks WHERE id = ?').get(subtaskId) as { task_id: string } | undefined
+  return row ? taskRepo.findById(row.task_id) : null
 }

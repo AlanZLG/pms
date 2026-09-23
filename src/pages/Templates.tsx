@@ -4,9 +4,12 @@ import { useState, useEffect } from 'react'
 import { Layers, Plus, Trash2, Edit2, FileText, DollarSign, LayoutGrid } from 'lucide-react'
 import { Button } from '@/components/ui'
 import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors'
 import { useAppStore } from '@/stores/app'
-import type { ProjectTemplate } from '../../shared/types'
+import type { ProjectTemplate, TemplateCategory } from '../../shared/types'
+import { TEMPLATE_CATEGORIES } from '../../shared/types'
+import { TemplateCategoryBadge } from '@/components/ProjectDialog'
 
 export default function Templates() {
   const [templates, setTemplates] = useState<(ProjectTemplate & { taskCount: number; budgetCount: number; kanbanColumnCount: number })[]>([])
@@ -43,7 +46,7 @@ export default function Templates() {
     }
   }
 
-  async function handleCreate(data: { name: string; description: string }) {
+  async function handleCreate(data: { name: string; description: string; category: TemplateCategory }) {
     try {
       await api.createProjectTemplate(data)
       setCreating(false)
@@ -53,7 +56,7 @@ export default function Templates() {
     }
   }
 
-  async function handleUpdate(id: string, data: { name: string; description: string }) {
+  async function handleUpdate(id: string, data: { name: string; description: string; category: TemplateCategory }) {
     try {
       await api.updateProjectTemplate(id, data)
       setEditingTemplate(null)
@@ -94,7 +97,10 @@ export default function Templates() {
                     <Layers className="h-5 w-5 text-brand" />
                   </div>
                   <div>
-                    <h3 className="font-medium text-text-primary">{template.name}</h3>
+                    <h3 className="flex items-center gap-2 font-medium text-text-primary">
+                      {template.name}
+                      <TemplateCategoryBadge category={template.category} />
+                    </h3>
                     {template.isSystem && (
                       <span className="text-[11px] text-brand">系统模板</span>
                     )}
@@ -155,6 +161,7 @@ export default function Templates() {
           defaultValues={{
             name: editingTemplate.name,
             description: editingTemplate.description,
+            category: editingTemplate.category || '',
           }}
           onClose={() => setEditingTemplate(null)}
           onSubmit={(data) => handleUpdate(editingTemplate.id, data)}
@@ -172,12 +179,14 @@ function TemplateFormDialog({
   onSubmit,
 }: {
   title: string
-  defaultValues?: { name: string; description: string }
+  defaultValues?: { name: string; description: string; category?: TemplateCategory | '' }
   onClose: () => void
-  onSubmit: (data: { name: string; description: string }) => Promise<void>
+  onSubmit: (data: { name: string; description: string; category: TemplateCategory }) => Promise<void>
 }) {
   const [name, setName] = useState(defaultValues?.name || '')
   const [description, setDescription] = useState(defaultValues?.description || '')
+  const [category, setCategory] = useState<TemplateCategory | ''>(defaultValues?.category || '')
+  const [categoryError, setCategoryError] = useState('')
   const [loading, setLoading] = useState(false)
 
   async function handleSubmit(e: React.FormEvent) {
@@ -186,9 +195,14 @@ function TemplateFormDialog({
       alert('请输入模板名称')
       return
     }
+    // v1.8.6：模板分类必选（决定创建项目时预填的项目类型）
+    if (!category) {
+      setCategoryError('请选择模板分类')
+      return
+    }
     setLoading(true)
     try {
-      await onSubmit({ name, description })
+      await onSubmit({ name, description, category })
     } finally {
       setLoading(false)
     }
@@ -206,6 +220,31 @@ function TemplateFormDialog({
           </button>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="mb-1.5 block text-xs text-muted">模板分类 <span className="text-rose-400">*</span></label>
+            <div className="grid grid-cols-5 gap-2">
+              {TEMPLATE_CATEGORIES.map((cat) => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => { setCategory(cat); setCategoryError('') }}
+                  className={cn(
+                    'rounded-lg border px-2 py-2 text-xs font-medium transition',
+                    category === cat
+                      ? 'border-brand bg-brand/15 text-brand-soft'
+                      : 'border-bg-border bg-bg-soft text-text-secondary hover:border-brand/40',
+                  )}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+            {categoryError ? (
+              <p className="mt-1 text-[11px] text-rose-400">{categoryError}</p>
+            ) : (
+              <p className="mt-1 text-[11px] text-muted">创建项目选择模板后，将按分类自动预填同名项目类型</p>
+            )}
+          </div>
           <div>
             <label className="mb-1.5 block text-xs text-muted">模板名称</label>
             <input

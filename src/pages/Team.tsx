@@ -26,8 +26,15 @@ export default function Team() {
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '', hourlyRate: 0, isOutsourced: false })
   const [userCostDialog, setUserCostDialog] = useState<string | null>(null)
   const [userCostForm, setUserCostForm] = useState({ isOutsourced: false, hourlyRate: null as number | null, costCenter: '', categoryId: null as string | null })
+  const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [createForm, setCreateForm] = useState({ email: '', name: '', password: '', role: 'member' })
+  const [createError, setCreateError] = useState('')
+  const [editTarget, setEditTarget] = useState<{ id: string; name: string; email: string } | null>(null)
+  const [editForm, setEditForm] = useState({ name: '', email: '', newPassword: '' })
+  const [editError, setEditError] = useState('')
 
   const isFinance = me?.role === 'admin' || me?.role === 'finance'
+  const isAdmin = me?.role === 'admin'
 
   const changeRole = useCallback(async (userId: string, role: string) => {
     try {
@@ -121,11 +128,51 @@ export default function Team() {
     return categories.data?.categories.find(c => c.id === categoryId)?.hourlyRate || null
   }, [categories.data])
 
+  const createUser = useCallback(async () => {
+    try {
+      setCreateError('')
+      await api.createUser(createForm)
+      notify('success', `成员 ${createForm.name} 已创建`)
+      users.reload()
+      setShowCreateDialog(false)
+      setCreateForm({ email: '', name: '', password: '', role: 'member' })
+    } catch (e) {
+      setCreateError(getErrorMessage(e, '创建失败'))
+    }
+  }, [createForm, notify, users])
+
+  const saveMemberEdit = useCallback(async () => {
+    if (!editTarget) return
+    try {
+      setEditError('')
+      await api.updateUserProfile(editTarget.id, { name: editForm.name, email: editForm.email })
+      if (editForm.newPassword) {
+        if (editForm.newPassword.length < 5) {
+          setEditError('新密码至少 5 位')
+          return
+        }
+        await api.resetUserPassword(editTarget.id, editForm.newPassword)
+      }
+      notify('success', '成员信息已更新')
+      users.reload()
+      setEditTarget(null)
+    } catch (e) {
+      setEditError(getErrorMessage(e, '更新失败'))
+    }
+  }, [editTarget, editForm, notify, users])
+
   return (
     <div className="space-y-6 animate-fade-up">
-      <div>
-        <h2 className="font-display text-2xl text-text-primary">团队协作</h2>
-        <p className="mt-1 text-sm text-muted">查看成员并配置权限</p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="font-display text-2xl text-text-primary">团队协作</h2>
+          <p className="mt-1 text-sm text-muted">查看成员并配置权限</p>
+        </div>
+        {isAdmin && (
+          <Button onClick={() => { setCreateForm({ email: '', name: '', password: '', role: 'member' }); setCreateError(''); setShowCreateDialog(true) }} className="text-sm gap-1">
+            <Plus className="h-4 w-4" /> 新建成员
+          </Button>
+        )}
       </div>
 
       {isFinance && (
@@ -175,6 +222,11 @@ export default function Team() {
             <Skeleton key={i} className="h-48" />
           ))}
         </div>
+      ) : users.data?.limited ? (
+        <EmptyState
+          title="仅管理员、财务与项目负责人可见"
+          hint="完整通讯录需要相应权限；如需指派任务，可在任务创建时选择负责人"
+        />
       ) : users.data && users.data.users.length > 0 ? (
         <div className="grid gap-4 animate-stagger sm:grid-cols-2 lg:grid-cols-3">
           {sortUsers(users.data?.users || []).map((u) => (
@@ -188,6 +240,11 @@ export default function Team() {
                   </p>
                   <p className="truncate text-xs text-muted">{u.email}</p>
                 </div>
+                {isAdmin && (
+                  <Button variant="ghost" size="sm" title="编辑成员" onClick={() => { setEditForm({ name: u.name, email: u.email, newPassword: '' }); setEditError(''); setEditTarget({ id: u.id, name: u.name, email: u.email }) }}>
+                    <Edit2 className="h-4 w-4" />
+                  </Button>
+                )}
               </div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                 <Stat label="负责" value={u.taskCount} />
@@ -249,7 +306,13 @@ export default function Team() {
                     </div>
                     <div className="bg-bg-soft rounded p-2">
                       <span className="text-muted">单价</span>
-                      <div className="font-medium text-text-primary">¥{(u.hourlyRate || getCategoryRate(u.categoryId) || 0)}/小时</div>
+                      <div className="font-medium text-text-primary">
+                        {/* 未配置个人/类别价时展示角色默认价（与后端 project-cost 口径一致：负责人 200/成员 150/外包 125） */}
+                        ¥{(u.hourlyRate || getCategoryRate(u.categoryId) || (u.isOutsourced ? 125 : 150))}/小时
+                        {!u.hourlyRate && !getCategoryRate(u.categoryId) && (
+                          <span className="ml-1 text-[10px] font-normal text-muted">默认价（负责人项目内 ¥200）</span>
+                        )}
+                      </div>
                     </div>
                     <div className="bg-bg-soft rounded p-2 col-span-2">
                       <span className="text-muted">成本中心</span>
@@ -300,6 +363,79 @@ export default function Team() {
             <div className="flex justify-end gap-2 mt-6">
               <Button variant="ghost" onClick={() => setShowCategoryDialog(false)}>取消</Button>
               <Button onClick={saveCategory}>{editingCategory ? '保存' : '创建'}</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCreateDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCreateDialog(false)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display text-lg text-text-primary">新建成员</h3>
+              <Button variant="ghost" size="sm" onClick={() => setShowCreateDialog(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-muted mb-1 block">登录邮箱 *</label>
+                <Input type="email" value={createForm.email} onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })} placeholder="name@company.com" className="bg-bg-soft" />
+              </div>
+              <div>
+                <label className="text-sm text-muted mb-1 block">姓名 *</label>
+                <Input value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} maxLength={40} className="bg-bg-soft" />
+              </div>
+              <div>
+                <label className="text-sm text-muted mb-1 block">初始密码 *（至少 5 位）</label>
+                <Input type="text" value={createForm.password} onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })} placeholder="设置初始登录密码" className="bg-bg-soft" />
+              </div>
+              <div>
+                <label className="text-sm text-muted mb-1 block">系统角色</label>
+                <select value={createForm.role} onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })} className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand">
+                  {roleList.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              </div>
+              {createError && <p className="text-xs text-red-400">{createError}</p>}
+              <p className="text-xs text-muted">创建后成员即可使用邮箱和密码登录系统。</p>
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="ghost" onClick={() => setShowCreateDialog(false)}>取消</Button>
+              <Button onClick={createUser} disabled={!createForm.email || !createForm.name || createForm.password.length < 5}>创建</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditTarget(null)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display text-lg text-text-primary">维护成员信息</h3>
+              <Button variant="ghost" size="sm" onClick={() => setEditTarget(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-muted mb-1 block">姓名</label>
+                <Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} maxLength={40} className="bg-bg-soft" />
+              </div>
+              <div>
+                <label className="text-sm text-muted mb-1 block">登录邮箱</label>
+                <Input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} className="bg-bg-soft" />
+              </div>
+              <div>
+                <label className="text-sm text-muted mb-1 block">重置密码（留空表示不修改）</label>
+                <Input type="text" value={editForm.newPassword} onChange={(e) => setEditForm({ ...editForm, newPassword: e.target.value })} placeholder="输入新密码（至少 5 位）" className="bg-bg-soft" />
+              </div>
+              {editError && <p className="text-xs text-red-400">{editError}</p>}
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <Button variant="ghost" onClick={() => setEditTarget(null)}>取消</Button>
+              <Button onClick={saveMemberEdit}>保存</Button>
             </div>
           </div>
         </div>

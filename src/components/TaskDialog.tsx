@@ -17,7 +17,7 @@ interface Props {
   projectId: string
   task?: Task | null
   defaultStatus?: TaskStatus
-  onSaved: () => void
+  onSaved: () => void | Promise<void>
   initialStartDate?: string
   initialDueDate?: string
 }
@@ -147,8 +147,10 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
       } else {
         await api.createTask(projectId, payload)
       }
-      onSaved()
+      await onSaved()
       onClose()
+    } catch (e) {
+      notify('error', getErrorMessage(e, task ? '更新任务失败' : '创建任务失败'))
     } finally {
       setLoading(false)
     }

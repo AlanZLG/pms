@@ -25,6 +25,7 @@ import { router as attachmentRoutes } from './routes/attachments.ts'
 import { router as exportRoutes } from './routes/export.ts'
 import feishuRoutes from './routes/feishu.ts'
 import backupRoutes from './routes/backup.ts'
+import { router as opLogRoutes } from './routes/opLogs.ts'
 
 dotenv.config()
 
@@ -36,7 +37,13 @@ app.use(cors())
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
-app.use(rateLimit(60_000, 300, 'api'))
+// 通知长轮询单独限流（不计入全局配额，避免 429 后死循环）
+app.use('/api/notifications/poll', rateLimit(60_000, 60, 'poll'))
+// 全局限流（排除 poll 路径，由上面的专用限流处理）
+app.use((req, res, next) => {
+  if (req.path === '/api/notifications/poll') return next()
+  next()
+}, rateLimit(60_000, 300, 'api'))
 
 // 触发数据库初始化
 import './db.ts'
@@ -66,6 +73,7 @@ app.use('/api/attachments', attachmentRoutes)
 app.use('/api/export', exportRoutes)
 app.use('/api/feishu', feishuRoutes)
 app.use('/api', backupRoutes)
+app.use('/api', opLogRoutes)
 
 /**
  * 统一错误处理

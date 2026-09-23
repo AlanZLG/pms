@@ -12,13 +12,65 @@ import {
   budgetRepo,
   kanbanColumnRepo,
   userRepo,
+  templateRepo,
 } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
-import type { TaskStatus, TaskPriority, BudgetCategory } from '../../shared/types.ts'
+import type { TaskStatus, TaskPriority, BudgetCategory, TemplateCategory } from '../../shared/types.ts'
+import { normalizeTemplateCategory } from '../../shared/types.ts'
 
 const router = Router()
 router.use(authRequired)
+
+// ===== 任务模板 CRUD（用于任务创建时快速填充）=====
+
+// 获取任务模板列表
+router.get('/', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const templates = templateRepo.findAll()
+    res.json({ templates })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// 创建任务模板
+router.post('/', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const schema = z.object({
+      name: z.string().min(1, '模板名称必填').max(60),
+      title: z.string().max(120).optional().default(''),
+      description: z.string().max(2000).optional().default(''),
+      priority: z.enum(['low', 'medium', 'high', 'urgent']).optional().default('medium'),
+      labels: z.array(z.string()).optional().default([]),
+    })
+    const parsed = schema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+
+    const template = templateRepo.create({
+      name: parsed.data.name,
+      title: parsed.data.title,
+      description: parsed.data.description,
+      priority: parsed.data.priority,
+      labels: parsed.data.labels,
+    })
+    res.status(201).json({ template })
+  } catch (e) {
+    next(e)
+  }
+})
+
+// 删除任务模板
+router.delete('/:id', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const template = templateRepo.findById(req.params.id)
+    if (!template) throw new ApiError(404, '模板不存在')
+    templateRepo.delete(req.params.id)
+    res.json({ ok: true })
+  } catch (e) {
+    next(e)
+  }
+})
 
 // ===== 项目模板 CRUD =====
 
@@ -61,6 +113,7 @@ router.post('/project-templates', (req: AuthRequest, res: Response, next: NextFu
     const schema = z.object({
       name: z.string().min(1, '模板名称必填').max(60),
       description: z.string().max(500).optional().default(''),
+      category: z.string().refine((v) => normalizeTemplateCategory(v) !== null, '模板分类必须是：运维项目/开发项目/咨询项目/实施项目/产品迭代').optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
@@ -68,6 +121,7 @@ router.post('/project-templates', (req: AuthRequest, res: Response, next: NextFu
     const template = projectTemplateRepo.create({
       name: parsed.data.name,
       description: parsed.data.description,
+      category: parsed.data.category ? normalizeTemplateCategory(parsed.data.category) : null,
       createdBy: req.userId,
     })
     res.status(201).json({ template })
@@ -90,11 +144,16 @@ router.patch('/project-templates/:id', (req: AuthRequest, res: Response, next: N
     const schema = z.object({
       name: z.string().min(1).max(60).optional(),
       description: z.string().max(500).optional(),
+      category: z.string().refine((v) => normalizeTemplateCategory(v) !== null, '模板分类必须是：运维项目/开发项目/咨询项目/实施项目/产品迭代').optional(),
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
 
-    projectTemplateRepo.update(req.params.id, parsed.data)
+    const { category, ...rest } = parsed.data
+    projectTemplateRepo.update(req.params.id, {
+      ...rest,
+      ...(category !== undefined ? { category: normalizeTemplateCategory(category) } : {}),
+    })
     res.json({ template: projectTemplateRepo.findById(req.params.id)! })
   } catch (e) {
     next(e)
@@ -138,10 +197,11 @@ router.post('/projects/:id/save-as-template', (req: AuthRequest, res: Response, 
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
 
-    // 创建模板
+    // 创建模板（分类按项目类型自动推导：运维/开发/咨询/实施同名映射；历史项目未设类型则为未分类）
     const template = projectTemplateRepo.create({
       name: parsed.data.templateName,
       description: parsed.data.templateDescription,
+      category: (project.projectType as TemplateCategory) || null,
       createdBy: req.userId,
     })
 

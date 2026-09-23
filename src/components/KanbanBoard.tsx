@@ -107,7 +107,7 @@ function SortableCard({
     id: task.id,
   })
   const assignee = users.find((u) => u.id === task.assigneeId)
-  const due = dueLabel(task.dueDate)
+  const due = dueLabel(task.dueDate, task.status === 'done')
 
   return (
     <div

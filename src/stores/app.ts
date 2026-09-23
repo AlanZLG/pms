@@ -8,13 +8,13 @@ interface AppState {
   user: User | null
   loading: boolean
   initialized: boolean
-  toast: { id: number; type: 'success' | 'error' | 'info'; message: string; onUndo?: () => void; undoLabel?: string } | null
+  toast: { id: number; type: 'success' | 'error' | 'info' | 'warning'; message: string; onUndo?: () => void; undoLabel?: string } | null
   init: () => Promise<void>
   login: (email: string, password: string) => Promise<void>
   register: (name: string, email: string, password: string) => Promise<void>
   logout: () => void
   setUser: (u: User | null) => void
-  notify: (type: 'success' | 'error' | 'info', message: string, opts?: { onUndo?: () => void; undoLabel?: string; duration?: number }) => void
+  notify: (type: 'success' | 'error' | 'info' | 'warning', message: string, opts?: { onUndo?: () => void; undoLabel?: string; duration?: number }) => void
   dismissToast: () => void
 }
 

@@ -55,13 +55,7 @@ export default function KanbanColumnDialog({ projectId, open, onClose, onChanged
   )
 
   // 加载看板列配置
-  useEffect(() => {
-    if (open) {
-      loadColumns()
-    }
-  }, [open, projectId])
-
-  const loadColumns = async () => {
+  const loadColumns = useCallback(async () => {
     try {
       setLoading(true)
       const res = await api.getKanbanColumns(projectId)
@@ -71,7 +65,13 @@ export default function KanbanColumnDialog({ projectId, open, onClose, onChanged
     } finally {
       setLoading(false)
     }
-  }
+  }, [projectId])
+
+  useEffect(() => {
+    if (open) {
+      loadColumns()
+    }
+  }, [open, loadColumns])
 
   const handleAddColumn = async () => {
     if (!newLabel.trim()) return

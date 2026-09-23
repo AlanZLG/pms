@@ -4,9 +4,9 @@ import { useState, useMemo } from 'react'
 import {
   PieChart, Pie, Cell, ResponsiveContainer,
   LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
-  BarChart, Bar,
+  BarChart, Bar, AreaChart, Area,
 } from 'recharts'
-import { TrendingUp, Flame, Users2 } from 'lucide-react'
+import { TrendingUp, Flame, Users2, Activity } from 'lucide-react'
 import { useSwr } from '@/lib/cache'
 import { api } from '@/lib/api'
 import { Card, Skeleton as UiSkeleton, EmptyState } from '@/components/ui'
@@ -15,15 +15,15 @@ import { cn } from '@/lib/utils'
 import type { StatsOverview, BurndownData, WorkloadItem, Project } from '../../shared/types'
 import { STATUS_COLORS_HEX } from '@/lib/constants'
 
-const ranges = [{ v: 14, l: '近 14 天' }, { v: 30, l: '近 30 天' }] as const
+const ranges = [{ v: 7, l: '近 7 天' }, { v: 14, l: '近 14 天' }, { v: 30, l: '近 30 天' }] as const
 
 export default function Stats() {
   const [range, setRange] = useState<number>(14)
-  const overview = useSwr<StatsOverview>('overview', () => api.overview())
-  const projects = useSwr<Project[]>('projects:list:names', () => api.listProjects().then((r) => r.projects))
-  const workload = useSwr<WorkloadItem[]>('workload', () => api.workload().then((r) => r.workload))
   const [projectId, setProjectId] = useState<string>('')
-  const burndown = useSwr<BurndownData>(projectId ? `burndown:${projectId}` : null, () => api.burndown(projectId))
+  const overview = useSwr<StatsOverview>(`overview:${projectId}:${range}`, () => api.overview(projectId || undefined, range))
+  const projects = useSwr<Project[]>('projects:list:names', () => api.listProjects().then((r) => r.projects))
+  const workload = useSwr<WorkloadItem[]>(`workload:${projectId}:${range}`, () => api.workload(projectId || undefined, range).then((r) => r.workload))
+  const burndown = useSwr<BurndownData>(`burndown:${projectId}:${range}`, () => api.burndown(projectId || undefined, range))
 
   const pieItems = useMemo(() => {
     return overview.data
@@ -46,6 +46,11 @@ export default function Stats() {
       actual: burndown.data!.actual[i],
     }))
   }, [burndown.data])
+
+  const trendChartData = useMemo(
+    () => (overview.data?.trend || []).map((t) => ({ ...t, day: t.date.slice(5) })),
+    [overview.data],
+  )
 
   const isInitialLoading = overview.loading && projects.loading && workload.loading
 
@@ -81,21 +86,39 @@ export default function Stats() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl text-text-primary">进度跟踪与统计</h2>
-          <p className="mt-1 text-sm text-muted">从数据视角总览团队节奏与交付轨迹</p>
+          <p className="mt-1 text-sm text-muted">
+            {projectId
+              ? `当前项目：${projects.data?.find((p) => p.id === projectId)?.name ?? ''}`
+              : '从数据视角总览团队节奏与交付轨迹'}
+          </p>
         </div>
-        <div className="flex gap-1 rounded-lg bg-bg-soft p-1">
-          {ranges.map((r) => (
-            <button
-              key={r.v}
-              onClick={() => setRange(r.v)}
-              className={cn(
-                'rounded-md px-3 py-1.5 text-xs font-medium transition',
-                range === r.v ? 'bg-brand text-text-primary' : 'text-muted hover:text-text-secondary',
-              )}
-            >
-              {r.l}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={projectId}
+            onChange={(e) => setProjectId(e.target.value)}
+            className="rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-xs text-text-primary outline-none focus:border-brand"
+          >
+            <option value="">全部项目</option>
+            {projects.data?.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <div className="flex gap-1 rounded-lg bg-bg-soft p-1">
+            {ranges.map((r) => (
+              <button
+                key={r.v}
+                onClick={() => setRange(r.v)}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-xs font-medium transition',
+                  range === r.v ? 'bg-brand text-text-primary' : 'text-muted hover:text-text-secondary',
+                )}
+              >
+                {r.l}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -148,26 +171,10 @@ export default function Stats() {
 
         {/* 燃尽图 */}
         <Card className="p-5 lg:col-span-2">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
-              <Flame className="h-5 w-5 text-warn" /> 燃尽图
-            </h3>
-            <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-xs text-text-primary outline-none focus:border-brand"
-            >
-              <option value="">选择项目…</option>
-              {projects.data?.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </div>
-          {!projectId ? (
-            <EmptyState title="选择一个项目查看燃尽图" />
-          ) : burndown.loading ? (
+          <h3 className="mb-4 flex items-center gap-2 font-display text-lg text-text-primary">
+            <Flame className="h-5 w-5 text-warn" /> 燃尽图
+          </h3>
+          {burndown.loading ? (
             <UiSkeleton className="h-64" />
           ) : burndown.data?.dates.length ? (
             <div className="h-64">
@@ -198,6 +205,49 @@ export default function Stats() {
         </Card>
       </div>
 
+      {/* 任务趋势 */}
+      <Card className="p-5">
+        <h3 className="mb-4 flex items-center gap-2 font-display text-lg text-text-primary">
+          <Activity className="h-5 w-5 text-brand-soft" /> 任务趋势
+        </h3>
+        {overview.loading ? (
+          <UiSkeleton className="h-56" />
+        ) : trendChartData.length === 0 ? (
+          <EmptyState title="暂无趋势数据" />
+        ) : (
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={trendChartData}>
+                <defs>
+                  <linearGradient id="gCreated" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#6366F1" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="#6366F1" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="gDone" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#10B981" stopOpacity={0.25} />
+                    <stop offset="100%" stopColor="#10B981" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
+                <XAxis dataKey="day" tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} />
+                <YAxis tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} width={28} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{
+                    background: '#16203A',
+                    border: '1px solid #243054',
+                    borderRadius: 12,
+                    fontSize: 12,
+                  }}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Area type="monotone" dataKey="created" name="新建任务" stroke="#6366F1" fill="url(#gCreated)" strokeWidth={2} />
+                <Area type="monotone" dataKey="completed" name="完成任务" stroke="#10B981" fill="url(#gDone)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </Card>
+
       {/* 成员工作量 */}
       <Card className="p-5">
         <h3 className="mb-4 flex items-center gap-2 font-display text-lg text-text-primary">
@@ -206,12 +256,14 @@ export default function Stats() {
         {workload.loading ? (
           <UiSkeleton className="h-64" />
         ) : workload.data && workload.data.length > 0 ? (
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
+          // 人数多时容器内纵向滚动：按每人 44px 计算图高，避免柱条被压得过细
+          <div className="max-h-72 overflow-y-auto pr-1">
+            <ResponsiveContainer width="100%" height={Math.max(288, workload.data.length * 44)}>
               <BarChart
                 data={workload.data}
                 layout="vertical"
                 margin={{ left: 60, right: 20 }}
+                maxBarSize={28}
               >
                 <CartesianGrid stroke="rgba(148,163,184,0.08)" horizontal={false} />
                 <XAxis type="number" tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} />

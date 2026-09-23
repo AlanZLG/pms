@@ -22,6 +22,7 @@ import Templates from '@/pages/Templates'
 
 const Stats = lazy(() => import('@/pages/Stats'))
 const HoursReport = lazy(() => import('@/pages/HoursReport'))
+const OpLogs = lazy(() => import('@/pages/OpLogs'))
 
 function PageFallback() {
   return (
@@ -99,6 +100,16 @@ export default function App() {
                         <ErrorBoundary>
                           <Suspense fallback={<PageFallback />}>
                             <HoursReport />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
+                    <Route
+                      path="/op-logs"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={<PageFallback />}>
+                            <OpLogs />
                           </Suspense>
                         </ErrorBoundary>
                       }
