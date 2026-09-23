@@ -56,6 +56,18 @@ export default function Team() {
     }
   }, [notify, users])
 
+  const deleteUser = useCallback(async (target: { id: string; name: string; role: string }) => {
+    if (target.role === 'admin') return
+    if (!confirm(`确定删除成员「${target.name}」吗？\n\n· 其名下负责的项目将转移给你\n· 任务指派将被清空、成员关系与评论一并移除\n· 删除后该账号无法再登录`)) return
+    try {
+      await api.deleteUser(target.id)
+      notify('success', '成员已删除')
+      users.reload()
+    } catch (e) {
+      notify('error', getErrorMessage(e, '删除失败'))
+    }
+  }, [notify, users])
+
   const saveCategory = useCallback(async () => {
     try {
       if (editingCategory) {
@@ -241,9 +253,16 @@ export default function Team() {
                   <p className="truncate text-xs text-muted">{u.email}</p>
                 </div>
                 {isAdmin && (
-                  <Button variant="ghost" size="sm" title="编辑成员" onClick={() => { setEditForm({ name: u.name, email: u.email, newPassword: '' }); setEditError(''); setEditTarget({ id: u.id, name: u.name, email: u.email }) }}>
-                    <Edit2 className="h-4 w-4" />
-                  </Button>
+                  <>
+                    <Button variant="ghost" size="sm" title="编辑成员" onClick={() => { setEditForm({ name: u.name, email: u.email, newPassword: '' }); setEditError(''); setEditTarget({ id: u.id, name: u.name, email: u.email }) }}>
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                    {u.id !== me?.id && u.role !== 'admin' && (
+                      <Button variant="ghost" size="sm" className="text-red-400" title="删除成员" onClick={() => deleteUser(u)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">

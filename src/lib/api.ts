@@ -281,6 +281,8 @@ export const api = {
     request<{ success: boolean }>(`/api/team/${userId}/password`, { method: 'PATCH', body: JSON.stringify({ newPassword }) }),
   updateRole: (userId: string, role: string) =>
     request<{ user: User }>(`/api/team/${userId}/role`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  deleteUser: (userId: string) =>
+    request<{ success: boolean; transferredProjects: number; unassignedTasks: number }>(`/api/team/${userId}`, { method: 'DELETE' }),
   updateUserCost: (userId: string, data: { isOutsourced?: boolean; hourlyRate?: number | null; costCenter?: string | null; categoryId?: string | null }) =>
     request<{ user: User }>(`/api/team/${userId}/cost`, { method: 'PATCH', body: JSON.stringify(data) }),
   getUserCost: (userId: string) =>

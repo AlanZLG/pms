@@ -72,6 +72,39 @@ export const userRepo = {
     const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(id) as { token_version: number } | undefined
     return row?.token_version ?? 0
   },
+  // 名下业务流水计数（删除成员前守卫：工时/台账/支出/附件属业务数据，需先处理而非随账号删除）
+  businessRecordCounts(id: string): { hours: number; opLogs: number; expenses: number; attachments: number } {
+    const c = (sql: string) => (db.prepare(sql).get(id) as { c: number }).c
+    return {
+      hours: c('SELECT COUNT(*) as c FROM task_hours WHERE user_id = ?'),
+      opLogs: c('SELECT COUNT(*) as c FROM op_logs WHERE user_id = ?'),
+      expenses: c('SELECT COUNT(*) as c FROM project_expenses WHERE created_by = ?'),
+      attachments: c('SELECT COUNT(*) as c FROM attachments WHERE user_id = ?'),
+    }
+  },
+  // 删除用户并清理关联数据（事务）：名下项目负责人转移给 adminId 并补 owner 成员行；
+  // 成员关系/评论/通知/筛选器/操作历史清理；任务与子任务指派置空；预算创建人转移（项目资产不随人删）
+  deleteWithCleanup(id: string, adminId: string): { transferredProjects: number; unassignedTasks: number } {
+    const tx = db.transaction(() => {
+      const owned = db.prepare('SELECT id FROM projects WHERE owner_id = ?').all(id) as SqlRow[]
+      db.prepare('UPDATE projects SET owner_id = ? WHERE owner_id = ?').run(adminId, id)
+      for (const p of owned) {
+        db.prepare('INSERT OR IGNORE INTO project_members (id, project_id, user_id, role, joined_at) VALUES (?,?,?,?,?)')
+          .run(genId(), p.id, adminId, 'owner', new Date().toISOString())
+      }
+      const unassignedTasks = db.prepare('UPDATE tasks SET assignee_id = NULL WHERE assignee_id = ?').run(id).changes
+      db.prepare('UPDATE subtasks SET assignee_id = NULL WHERE assignee_id = ?').run(id)
+      db.prepare('DELETE FROM project_members WHERE user_id = ?').run(id)
+      db.prepare('DELETE FROM comments WHERE user_id = ?').run(id)
+      db.prepare('DELETE FROM notifications WHERE user_id = ?').run(id)
+      db.prepare('DELETE FROM saved_filters WHERE user_id = ?').run(id)
+      db.prepare('DELETE FROM task_history WHERE user_id = ?').run(id)
+      db.prepare('UPDATE project_budgets SET created_by = ? WHERE created_by = ?').run(adminId, id)
+      db.prepare('DELETE FROM users WHERE id = ?').run(id)
+      return { transferredProjects: owned.length, unassignedTasks }
+    })
+    return tx()
+  },
   updateCost(id: string, data: { isOutsourced?: boolean; hourlyRate?: number | null; costCenter?: string | null; categoryId?: string | null }): User | null {
     const fields: string[] = []
     const values: SqlParam[] = []

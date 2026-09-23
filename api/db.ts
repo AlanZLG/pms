@@ -618,6 +618,9 @@ function seed() {
   const pwd = bcrypt.hashSync('12345', 10)
 
   // Phase 1: 确保所有演示用户存在
+  // 管理员账号始终确保存在（登录与 e2e 依赖）；其余演示账号与演示数据受
+  // FORTUNE_SEED_DEMO 开关控制：设为 0 时不补插，已删除的演示账号不再复活
+  const seedDemo = process.env.FORTUNE_SEED_DEMO !== '0'
   const neededUsers = [
     { name: 'Alan', email: 'leigang@creat-value.com', role: 'admin', color: colors[0] },
     { name: '负责人', email: 'owner@pm.dev', role: 'owner', color: colors[1] },
@@ -630,7 +633,7 @@ function seed() {
     'INSERT OR IGNORE INTO users (id, email, password_hash, name, avatar_color, role, created_at) VALUES (?,?,?,?,?,?,?)',
   )
   const userIds: Record<string, string> = {}
-  neededUsers.forEach((u) => {
+  const ensureUser = (u: (typeof neededUsers)[number]) => {
     // 查找已有用户，没有就创建
     const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(u.email) as { id: string } | undefined
     if (existing) {
@@ -640,7 +643,10 @@ function seed() {
       insertUser.run(uid, u.email, pwd, u.name, u.color, u.role, now)
       userIds[u.email] = uid
     }
-  })
+  }
+  ensureUser(neededUsers[0])
+  if (!seedDemo) return
+  neededUsers.slice(1).forEach(ensureUser)
 
   if (projectCount > 0) return  // 已有项目就不补了
 

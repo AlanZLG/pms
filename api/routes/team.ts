@@ -73,6 +73,33 @@ router.patch('/:userId/password', (req: AuthRequest, res: Response, next: NextFu
   } catch (e) { next(e) }
 })
 
+// 管理员删除成员：名下项目转移给管理员，成员关系/指派/评论等一并清理；
+// 工时/台账/支出/附件属业务流水，存在时拒绝删除以免误删真实数据
+router.delete('/:userId', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const current = userRepo.findById(req.userId!)
+    if (current?.role !== 'admin') throw new ApiError(403, '仅管理员可删除成员')
+    const target = userRepo.findById(req.params.userId)
+    if (!target) throw new ApiError(404, '用户不存在')
+    if (target.id === current.id) throw new ApiError(400, '不能删除自己的账号')
+    if (target.role === 'admin') throw new ApiError(400, '管理员账号不能删除')
+
+    const records = userRepo.businessRecordCounts(target.id)
+    const blocking = [
+      records.hours > 0 && `${records.hours} 条工时记录`,
+      records.opLogs > 0 && `${records.opLogs} 条运维台账`,
+      records.expenses > 0 && `${records.expenses} 条支出记录`,
+      records.attachments > 0 && `${records.attachments} 个任务附件`,
+    ].filter(Boolean) as string[]
+    if (blocking.length) {
+      throw new ApiError(400, `该成员名下尚有${blocking.join('、')}，请先处理后再删除`)
+    }
+
+    const result = userRepo.deleteWithCleanup(target.id, current.id)
+    res.json({ success: true, ...result })
+  } catch (e) { next(e) }
+})
+
 // 用户列表(附带任务数)
 router.get('/', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {

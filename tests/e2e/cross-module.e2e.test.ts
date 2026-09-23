@@ -10,7 +10,7 @@
  *  - 结束后终止子进程并清理临时目录。
  */
 import { describe, it, expect, afterAll, beforeAll } from 'vitest'
-import { spawn, type ChildProcess } from 'child_process'
+import { spawn, execFileSync, type ChildProcess } from 'child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,6 +23,72 @@ const BASE = `http://localhost:${PORT}/api`
 
 let server: ChildProcess | null = null
 let tmpDir = ''
+
+/**
+ * 防残留守护（上一轮清扫）：
+ *  1. 强杀上一轮因测试中断（如 Ctrl+C/SIGKILL）遗留的守护包装器进程，
+ *     包装器已按孤儿检测自行终止其服务子进程；本轮启动前再兜底清一次
+ *  2. 清扫极端情况（包装器自身被强杀）遗留的孤儿服务进程——
+ *     仅杀 ppid=1 且 FORTUNE_DB_PATH 指向 fortune-e2e-* 临时库的进程，绝不误伤生产服务
+ *  3. 清理超过 1 小时的陈旧临时库目录（保留可能仍在运行的并发实例）
+ */
+function readProcessEnv(pid: string): string {
+  try {
+    return execFileSync('ps', ['-wwE', '-p', pid], { encoding: 'utf8' })
+  } catch {
+    // macOS ps -E 失败时尝试 Linux /proc
+  }
+  try {
+    return fs.readFileSync(`/proc/${pid}/environ`, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+function sweepOrphanServers() {
+  let out = ''
+  try {
+    out = execFileSync('ps', ['-axo', 'pid=,ppid=,command='], { encoding: 'utf8' })
+  } catch {
+    return
+  }
+  for (const line of out.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/)
+    if (!m) continue
+    const [, pid, ppid, cmd] = m
+    if (ppid !== '1' || !cmd.includes('api/server.ts')) continue
+    const env = readProcessEnv(pid)
+    if (env.includes('FORTUNE_DB_PATH') && env.includes('fortune-e2e-')) {
+      try {
+        process.kill(Number(pid), 'SIGKILL')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+  }
+}
+
+function sweepStaleRunners() {
+  try {
+    // execFileSync 直调（不经 shell），避免 pkill -f 模式串出现在 sh -c 命令行中被自身匹配
+    execFileSync('pkill', ['-KILL', '-f', 'e2e/server-guard[.]mjs'], { stdio: 'ignore' })
+  } catch {
+    // 无匹配进程时 pkill 返回非零，属正常
+  }
+  sweepOrphanServers()
+  const tmpRoot = os.tmpdir()
+  for (const d of fs.readdirSync(tmpRoot)) {
+    if (!d.startsWith('fortune-e2e-')) continue
+    const full = path.join(tmpRoot, d)
+    try {
+      if (Date.now() - fs.statSync(full).mtimeMs > 60 * 60 * 1000) {
+        fs.rmSync(full, { recursive: true, force: true })
+      }
+    } catch {
+      // 目录可能已被并发实例使用或移除，忽略
+    }
+  }
+}
 
 async function waitForHealth(timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -57,8 +123,10 @@ async function req(
 }
 
 beforeAll(async () => {
+  sweepStaleRunners()
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fortune-e2e-'))
-  server = spawn('node_modules/.bin/tsx', ['api/server.ts'], {
+  // 经 server-guard.mjs 包装器启动：父进程死亡/Ctrl+C/强杀时服务自动终止，不留孤儿进程
+  server = spawn(process.execPath, [path.join(PROJECT_ROOT, 'tests/e2e/server-guard.mjs')], {
     cwd: PROJECT_ROOT,
     env: {
       ...process.env,
@@ -70,14 +138,25 @@ beforeAll(async () => {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  server.stdout?.on('data', (d: Buffer) => process.stdout.write(`[server] ${d}`))
   server.stderr?.on('data', (d: Buffer) => process.stderr.write(`[server] ${d}`))
   await waitForHealth()
 }, 90_000)
 
 afterAll(async () => {
   if (server) {
-    // 直接 SIGKILL：SIGTERM 会触发 server.close() 等待 keep-alive 连接而悬挂
-    server.kill('SIGKILL')
+    // 对包装器发 SIGTERM，由其转发为对服务的 SIGKILL（直接 SIGKILL 包装器会绕过转发逻辑）
+    server.kill('SIGTERM')
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(() => {
+        server?.kill('SIGKILL')
+        resolve()
+      }, 3000)
+      server?.once('exit', () => {
+        clearTimeout(t)
+        resolve()
+      })
+    })
   }
   if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true })
 })
@@ -91,6 +170,13 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
   let projectId = ''
   let taskId = ''
   let opLogId = ''
+  let consultProjectId = ''
+  let sourceMergeId = ''
+  const movedLogIds: string[] = []
+  let adminId = ''
+  let tempEmail = ''
+  let tempUserId = ''
+  let tempProjectId = ''
 
   it('种子管理员登录 → token + /auth/me 回读 admin 身份', async () => {
     const r = await req('POST', '/auth/login', { email: 'leigang@creat-value.com', password: '12345' })
@@ -99,6 +185,7 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     const me = await req('GET', '/auth/me', undefined, adminToken)
     expect(me.status).toBe(200)
     expect((me.json.user as { role: string }).role).toBe('admin')
+    adminId = (me.json.user as { id: string }).id
   })
 
   it('注册新用户 → 普通成员（全新库下 register 不再授予 admin）', async () => {
@@ -228,5 +315,172 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     const back = await req('GET', `/tasks/${taskId}`, undefined, adminToken)
     expect(back.status).toBe(200)
     expect((back.json.task as { deletedAt: string | null }).deletedAt ?? null).toBeNull()
+  })
+
+  // ===== v1.8.5 ~ v1.9.1 功能联动回归（模板 / 类型 / 结项合并）=====
+
+  it('非法 projectType → 400（六类白名单硬校验）', async () => {
+    const r = await req('POST', '/projects', { name: 'E2E非法类型项目', projectType: '不存在的类型' }, adminToken)
+    expect(r.status).toBe(400)
+  })
+
+  it('系统模板种子齐全（5 个）且分类与规模正确', async () => {
+    const r = await req('GET', '/templates/project-templates', undefined, adminToken)
+    expect(r.status).toBe(200)
+    const templates = r.json.templates as Array<{
+      name: string; category: string | null; isSystem: boolean
+      taskCount: number; budgetCount: number; kanbanColumnCount: number
+    }>
+    const sys = templates.filter((t) => t.isSystem)
+    expect(sys.map((t) => t.name).sort()).toEqual(
+      ['产品迭代模板', '客户支持模板', '实施交付模板', '咨询服务模板', '网站开发模板'].sort(),
+    )
+    const byName = Object.fromEntries(sys.map((t) => [t.name, t]))
+    // 模板分类与项目类型白名单同源（v1.8.6 归一化）
+    expect(byName['网站开发模板'].category).toBe('开发项目')
+    expect(byName['产品迭代模板'].category).toBe('产品迭代')
+    expect(byName['客户支持模板'].category).toBe('运维项目')
+    expect(byName['咨询服务模板'].category).toBe('咨询项目')
+    expect(byName['实施交付模板'].category).toBe('实施项目')
+    // 模板规模：咨询 6 任务/2 预算/4 看板列；实施 7 任务/2 预算/4 看板列
+    expect(byName['咨询服务模板'].taskCount).toBe(6)
+    expect(byName['咨询服务模板'].budgetCount).toBe(2)
+    expect(byName['咨询服务模板'].kanbanColumnCount).toBe(4)
+    expect(byName['实施交付模板'].taskCount).toBe(7)
+    expect(byName['实施交付模板'].budgetCount).toBe(2)
+    expect(byName['实施交付模板'].kanbanColumnCount).toBe(4)
+  })
+
+  it('用系统模板建项目 → 模板任务整体复制到项目（模板×任务联动）', async () => {
+    const list = await req('GET', '/templates/project-templates', undefined, adminToken)
+    const templates = list.json.templates as Array<{ id: string; name: string }>
+    const tpl = templates.find((t) => t.name === '咨询服务模板')!
+    const created = await req('POST', '/projects', {
+      name: 'E2E咨询项目',
+      projectType: '咨询项目',
+      templateId: tpl.id,
+    }, adminToken)
+    expect(created.status).toBe(201)
+    consultProjectId = (created.json.project as { id: string }).id
+    const tasksRes = await req('GET', `/projects/${consultProjectId}/tasks`, undefined, adminToken)
+    expect(tasksRes.status).toBe(200)
+    const tasks = tasksRes.json.tasks as Array<{ title: string }>
+    expect(tasks.length).toBe(6)
+    expect(tasks.map((t) => t.title)).toContain('需求调研与诊断')
+  })
+
+  it('非法模板分类 → 400（分类归一化守卫）', async () => {
+    const r = await req('POST', '/templates/project-templates', { name: 'E2E非法分类模板', category: '胡乱分类' }, adminToken)
+    expect(r.status).toBe(400)
+  })
+
+  it('项目保存为模板 → 分类按项目类型自动推导（项目×模板反向联动）', async () => {
+    const r = await req('POST', `/templates/projects/${projectId}/save-as-template`, { templateName: 'E2E保存的运维模板' }, adminToken)
+    expect(r.status).toBe(201)
+    const template = r.json.template as { category: string | null; tasks: unknown[] }
+    expect(template.category).toBe('运维项目')
+    // projectId 含 1 个任务（已从回收站恢复），应复制进模板
+    expect(template.tasks.length).toBe(1)
+  })
+
+  it('建「运维增强」项目并登记 2 条台账（结项合并准备）', async () => {
+    const created = await req('POST', '/projects', { name: 'E2E待合并增强项目', projectType: '运维增强', status: 'active' }, adminToken)
+    expect(created.status).toBe(201)
+    sourceMergeId = (created.json.project as { id: string }).id
+    for (const i of [1, 2]) {
+      const r = await req('POST', '/op-logs', {
+        projectId: sourceMergeId,
+        category: '故障处理',
+        status: '已完成',
+        system: 'E2E系统',
+        logDate: '2026-09-23',
+        problem: `E2E合并前问题${i}`,
+        detail: '定位与处理',
+        cause: '根因',
+        solution: '处置方案',
+        hours: 1,
+        completionDate: '2026-09-23',
+      }, adminToken)
+      expect(r.status).toBe(201)
+      movedLogIds.push((r.json.log as { id: string }).id)
+    }
+  })
+
+  it('结项合并守卫矩阵：越权 403 / 源类型不符 400 / 目标类型不符 400 / 自合并 400', async () => {
+    // 成员非 owner：无权发起合并
+    const forbidden = await req('POST', `/projects/${sourceMergeId}/merge`, { targetProjectId: projectId }, memberToken)
+    expect(forbidden.status).toBe(403)
+    // 源项目不是「运维增强」类型
+    const wrongSource = await req('POST', `/projects/${projectId}/merge`, { targetProjectId: sourceMergeId }, adminToken)
+    expect(wrongSource.status).toBe(400)
+    // 目标项目不是「运维项目」类型（咨询项目）
+    const wrongTarget = await req('POST', `/projects/${sourceMergeId}/merge`, { targetProjectId: consultProjectId }, adminToken)
+    expect(wrongTarget.status).toBe(400)
+    // 合并到项目自身
+    const selfMerge = await req('POST', `/projects/${sourceMergeId}/merge`, { targetProjectId: sourceMergeId }, adminToken)
+    expect(selfMerge.status).toBe(400)
+  })
+
+  it('执行结项合并 → 台账整体转绑到目标运维项目（合并×台账联动）', async () => {
+    const r = await req('POST', `/projects/${sourceMergeId}/merge`, { targetProjectId: projectId }, adminToken)
+    expect(r.status).toBe(200)
+    expect(r.json.movedOpLogs).toBe(2)
+    const source = r.json.project as { mergedIntoProjectId: string | null }
+    expect(source.mergedIntoProjectId).toBe(projectId)
+
+    // 目标项目可见 2 条转绑台账，源项目台账清零
+    const targetList = await req('GET', `/op-logs?projectId=${projectId}`, undefined, adminToken)
+    expect(targetList.status).toBe(200)
+    const targetIds = (targetList.json.logs as Array<{ id: string }>).map((l) => l.id)
+    for (const id of movedLogIds) expect(targetIds).toContain(id)
+
+    const sourceList = await req('GET', `/op-logs?projectId=${sourceMergeId}`, undefined, adminToken)
+    expect(sourceList.status).toBe(200)
+    expect((sourceList.json.logs as unknown[]).length).toBe(0)
+  })
+
+  it('重复合并同一项目 → 400（合并守卫幂等）', async () => {
+    const r = await req('POST', `/projects/${sourceMergeId}/merge`, { targetProjectId: projectId }, adminToken)
+    expect(r.status).toBe(400)
+  })
+
+  // ===== 用户管理：删除成员与关联清理 =====
+
+  it('管理员新建成员 → 成员登录并创建自己的项目', async () => {
+    tempEmail = `e2e-del-${Date.now()}@pm.dev`
+    const created = await req('POST', '/team', { email: tempEmail, password: 'del-pass-123', name: 'E2E待删成员', role: 'member' }, adminToken)
+    expect(created.status).toBe(201)
+    tempUserId = (created.json.user as { id: string }).id
+    const login = await req('POST', '/auth/login', { email: tempEmail, password: 'del-pass-123' })
+    expect(login.status).toBe(200)
+    const token = (login.json as { token: string }).token
+    const proj = await req('POST', '/projects', { name: 'E2E待删成员的项目', projectType: '开发项目' }, token)
+    expect(proj.status).toBe(201)
+    tempProjectId = (proj.json.project as { id: string }).id
+  })
+
+  it('删除守卫：删自己 400 / 非管理员 403 / 管理员账号不可删', async () => {
+    const selfDel = await req('DELETE', `/team/${adminId}`, undefined, adminToken)
+    expect(selfDel.status).toBe(400)
+    const forbidden = await req('DELETE', `/team/${adminId}`, undefined, memberToken)
+    expect(forbidden.status).toBe(403)
+    const admin2 = await req('POST', '/team', { email: `e2e-admin2-${Date.now()}@pm.dev`, password: 'del-pass-123', name: 'E2E管理员', role: 'admin' }, adminToken)
+    expect(admin2.status).toBe(201)
+    const delAdmin = await req('DELETE', `/team/${(admin2.json.user as { id: string }).id}`, undefined, adminToken)
+    expect(delAdmin.status).toBe(400)
+  })
+
+  it('执行删除 → 项目负责人转移给管理员、账号无法登录、列表移除', async () => {
+    const del = await req('DELETE', `/team/${tempUserId}`, undefined, adminToken)
+    expect(del.status).toBe(200)
+    expect(del.json.transferredProjects).toBe(1)
+    const login = await req('POST', '/auth/login', { email: tempEmail, password: 'del-pass-123' })
+    expect(login.status).toBe(401)
+    const proj = await req('GET', `/projects/${tempProjectId}`, undefined, adminToken)
+    expect(proj.status).toBe(200)
+    expect((proj.json.project as { ownerId: string }).ownerId).toBe(adminId)
+    const team = await req('GET', '/team', undefined, adminToken)
+    expect(team.status).toBe(200)
+    expect((team.json.users as Array<{ id: string }>).map((u) => u.id)).not.toContain(tempUserId)
   })
 })

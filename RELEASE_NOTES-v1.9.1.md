@@ -13,6 +13,7 @@
 3. **台账权限口径统一**：修复「看得到列表、打不开详情」割裂（owner/member/guest 补授 `oplog.view`，存量库自动回填）
 4. **技术债全量清零**：ESLint 警告 35 → 0（含 18 项 React Hooks 依赖修复），recharts 拆独立 chunk 提速非图表页面
 5. **e2e 集成测试沉淀进 CI**：真实服务 + 临时库全链路 13 项断言，`check → lint → test → build` 四道闸门自动把关
+6. **e2e 防残留守护**：服务包装器「独立进程组 + 父进程死亡自灭」+ 启动前残留清扫三层机制，SIGKILL 强杀演练 1 秒内服务树全灭，杜绝测试残留进程占用生产端口
 
 ---
 
@@ -33,6 +34,7 @@
 
 - **e2e 集成测试**：`tests/e2e/cross-module.e2e.test.ts` 子进程启动真实服务（随机端口 + `FORTUNE_DB_PATH` 临时库 + SMTP 置空防外发），覆盖种子管理员登录/注册角色 → 项目类型硬校验 → 加成员 → 任务 → 工时 → 台账登记/列表/详情/统计 → 全局搜索 → 成员统计作用域 → 软删/回收站/恢复 共 13 项断言
 - **CI 流水线**：`.github/workflows/ci.yml` 四道闸门（tsc → ESLint 0 警告 → vitest 全量含 e2e → 构建）；新增 `npm run test:e2e` 单独运行入口
+- **e2e 防残留守护**：`tests/e2e/server-guard.mjs` 包装器托管服务子进程树——`detached: true` 独立进程组 + 每秒孤儿检测（`ppid === 1` 立即负 PID 组杀整树）+ SIGTERM/SIGINT 转发组杀；测试 `beforeAll` 启动前按 `FORTUNE_DB_PATH + fortune-e2e-` 环境变量识别并清扫历史孤儿进程与过期临时目录，绝不误伤生产服务
 
 ---
 
@@ -49,6 +51,7 @@
 - 🔴 **台账「看得到列表打不开详情」**：详情/AI 端点校验 `oplog.view` 而多数角色未授权（详见上「改进」）
 - 咨询模板插入顺序缺陷（v1.8.8）：初版在 `initSystemTemplates` 之前补插导致新空库 count 守卫误跳过其余 3 个系统模板——已修正调用顺序并重放验证
 - 日期正则 `no-useless-escape`、甘特图多余依赖等静态问题随 lint 清零一并修复
+- 🟠 **e2e 服务孤儿进程残留**（曾致生产端口被占故障）：tsx 为双层进程（CLI 外层再 spawn 内层 node），直接 SIGKILL 外层会把内层 node 孤儿化（reparent 到 pid 1）继续监听随机端口，多次运行后残留进程累积甚至抢占生产端口；现以「进程组负 PID 组杀」根治，辅以启动清扫兜底（详见「新增功能 · 工程与质量」）
 
 ---
 
@@ -80,6 +83,7 @@
 | e2e 集成测试 `npm run test:e2e`（真实服务 + 临时库，13 项链路断言） | 13/13 |
 | 构建 `npm run build` | 成功（vendor-charts 362KB / gzip 89KB 独立拆分） |
 | 测试数据 | e2e 临时库/目录/子进程全部清理，生产 `data/app.db` 零残留（已回查确认） |
+| 防残留强杀演练（模拟 vitest 被 SIGKILL） | 父进程死亡 1 秒内服务树全灭，无孤儿进程、无临时目录残留 |
 
 ---
 
@@ -90,7 +94,7 @@
 - [FEATURES.md](file:///Volumes/DATA/Project/FEATURES.md)（特性清单）
 - [TEST_REPORT.md](file:///Volumes/DATA/Project/TEST_REPORT.md)（第二十 ~ 二十六章测试记录）
 - [集成测试总结报告](file:///Volumes/DATA/Project/docs/测试总结报告-集成测试-20260922.md)
-- [CI 流水线](file:///Volumes/DATA/Project/.github/workflows/ci.yml) / [e2e 测试](file:///Volumes/DATA/Project/tests/e2e/cross-module.e2e.test.ts)
+- [CI 流水线](file:///Volumes/DATA/Project/.github/workflows/ci.yml) / [e2e 测试](file:///Volumes/DATA/Project/tests/e2e/cross-module.e2e.test.ts) / [e2e 服务守护包装器](file:///Volumes/DATA/Project/tests/e2e/server-guard.mjs)
 
 ---
 
