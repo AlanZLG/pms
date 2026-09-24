@@ -246,6 +246,10 @@ router.post('/:projectId/reassign', (req: AuthRequest, res: Response, next: Next
     if (to.role === 'guest') throw new ApiError(400, '访客角色无任务指派资格，不能作为替换目标')
 
     const { taskIds, subtaskCount } = taskRepo.reassignProjectTasks(project.id, from.id, to.id)
+    // 替换目标自动入会：接手任务即成为项目成员（与指派自动入会同口径，v1.9.3）
+    if (taskIds.length > 0 || subtaskCount > 0) {
+      projectRepo.addMember(project.id, to.id, 'editor')
+    }
     // 项目级操作日志：一条汇总留痕（任务级明细另见 task_history）
     activityLogRepo.create(project.id, req.userId!, 'reassign',
       `人员替换: ${from.name} → ${to.name}，涉及 ${taskIds.length} 个任务、${subtaskCount} 个子任务`)

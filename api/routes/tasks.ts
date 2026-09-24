@@ -18,6 +18,16 @@ import type { TaskStatus, TaskPriority, TaskFilter, Project } from '../../shared
 const router = Router()
 router.use(authRequired)
 
+// 指派自动入会（v1.9.3）：任务/子任务被指派给非项目成员时自动加为 editor，
+// 保证被指派人能进入项目看到并处理自己的任务（guest 不入会，保持只读访客语义）
+export function ensureAssigneeMembership(projectId: string, assigneeId: string | null | undefined): void {
+  if (!assigneeId) return
+  const u = userRepo.findById(assigneeId)
+  if (!u || u.role === 'guest') return
+  if (projectRepo.members(projectId).some((m) => m.userId === assigneeId)) return
+  projectRepo.addMember(projectId, assigneeId, 'editor')
+}
+
 // 全局搜索任务
 router.get('/search', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -126,6 +136,8 @@ router.post('/projects/:projectId/tasks', (req: AuthRequest, res: Response, next
     if (parsed.data.assigneeId && !userRepo.findById(parsed.data.assigneeId)) {
       throw new ApiError(400, '负责人不存在')
     }
+    // 指派自动入会：被指派人为非成员时自动加入项目
+    ensureAssigneeMembership(project.id, parsed.data.assigneeId)
     const task = taskRepo.create({
       projectId: project.id,
       title: parsed.data.title,
@@ -205,6 +217,8 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
     }
     if (parsed.data.assigneeId !== undefined && parsed.data.assigneeId !== prevAssignee) {
       historyRepo.create(task.id, req.userId, 'assignee_change', `负责人: ${prevAssignee || '未分配'} → ${parsed.data.assigneeId || '未分配'}`)
+      // 指派自动入会：新负责人为非成员时自动加入项目
+      ensureAssigneeMembership(task.projectId, parsed.data.assigneeId)
     }
     if (parsed.data.progress !== undefined) {
       historyRepo.create(task.id, req.userId, 'progress_update', `进度: ${parsed.data.progress}%`)
@@ -453,6 +467,8 @@ router.post('/tasks/:taskId/subtasks', (req: AuthRequest, res: Response, next: N
     if (parsed.data.assigneeId && !userRepo.findById(parsed.data.assigneeId)) {
       throw new ApiError(400, '子任务负责人不存在')
     }
+    // 指派自动入会：子任务被指派人为非成员时自动加入项目
+    ensureAssigneeMembership(task.projectId, parsed.data.assigneeId)
     const subtask = subtaskRepo.create(task.id, parsed.data.title, parsed.data.assigneeId || null)
     // 子任务变化 → 重算任务进度与项目进度
     taskRepo.recalcProgress(task.id)
@@ -519,6 +535,8 @@ router.patch('/subtasks/:subtaskId', (req: AuthRequest, res: Response, next: Nex
       }
       if (parsed.data.assigneeId !== undefined && prevSubtask && parsed.data.assigneeId !== (prevSubtask.assigneeId || null)) {
         historyRepo.create(task.id, req.userId, 'assignee_change', `子任务「${prevSubtask.title}」负责人: ${prevSubtask.assigneeId || '未分配'} → ${parsed.data.assigneeId || '未分配'}`)
+        // 指派自动入会：新负责人为非成员时自动加入项目
+        ensureAssigneeMembership(task.projectId, parsed.data.assigneeId)
         // 子任务指派通知
         const newAssignee = parsed.data.assigneeId as string | null
         if (newAssignee && newAssignee !== req.userId) {
