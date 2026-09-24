@@ -342,11 +342,11 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     }>
     const sys = templates.filter((t) => t.isSystem)
     expect(sys.map((t) => t.name).sort()).toEqual(
-      ['产品迭代模板', '客户支持模板', '实施交付模板', '咨询服务模板', '网站开发模板'].sort(),
+      ['产品迭代模板', '客户支持模板', '实施交付模板', '咨询服务模板', '新规开发模板'].sort(),
     )
     const byName = Object.fromEntries(sys.map((t) => [t.name, t]))
     // 模板分类与项目类型白名单同源（v1.8.6 归一化）
-    expect(byName['网站开发模板'].category).toBe('开发项目')
+    expect(byName['新规开发模板'].category).toBe('开发项目')
     expect(byName['产品迭代模板'].category).toBe('产品迭代')
     expect(byName['客户支持模板'].category).toBe('运维项目')
     expect(byName['咨询服务模板'].category).toBe('咨询项目')
@@ -595,6 +595,36 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(forbidden.status).toBe(403)
 
     await req('DELETE', `/projects/${pid}`, undefined, adminToken)
+  })
+
+  it('项目详情读取守卫：成员可进，旁观者 403，finance/admin 放行', async () => {
+    // member 创建项目并成为负责人
+    const created = await req('POST', '/projects', { name: `守卫项目${Date.now()}`, projectType: '开发项目' }, memberToken)
+    expect(created.status).toBe(201)
+    const pid = (created.json.project as { id: string }).id
+
+    // 负责人本人可读详情与任务列表
+    const ownerView = await req('GET', `/projects/${pid}/tasks`, undefined, memberToken)
+    expect(ownerView.status).toBe(200)
+    const ownerDetail = await req('GET', `/projects/${pid}`, undefined, memberToken)
+    expect(ownerDetail.status).toBe(200)
+
+    // 旁观成员（非项目成员）全链 403
+    const bystanderEmail = `e2e-reader-${Date.now()}@pm.dev`
+    await req('POST', '/team', { email: bystanderEmail, password: 'by-pass-123', name: 'E2E旁观读者', role: 'member' }, adminToken)
+    const byToken = ((await req('POST', '/auth/login', { email: bystanderEmail, password: 'by-pass-123' })).json as { token: string }).token
+    expect((await req('GET', `/projects/${pid}`, undefined, byToken)).status).toBe(403)
+    expect((await req('GET', `/projects/${pid}/tasks`, undefined, byToken)).status).toBe(403)
+    expect((await req('GET', `/projects/${pid}/kanban-columns`, undefined, byToken)).status).toBe(403)
+    expect((await req('GET', `/projects/${pid}/dependencies`, undefined, byToken)).status).toBe(403)
+
+    // admin 与 finance 放行
+    expect((await req('GET', `/projects/${pid}`, undefined, adminToken)).status).toBe(200)
+    await req('PATCH', `/team/${(await req('GET', '/auth/me', undefined, byToken)).json.user.id}/role`, { role: 'finance' }, adminToken)
+    const financeLogin = await req('POST', '/auth/login', { email: bystanderEmail, password: 'by-pass-123' })
+    expect((await req('GET', `/projects/${pid}`, undefined, (financeLogin.json as { token: string }).token)).status).toBe(200)
+
+    await req('DELETE', `/projects/${pid}`, undefined, memberToken)
   })
 
   it('人员类别操作日志：创建/修改/删除全程留痕，member 无权查询', async () => {

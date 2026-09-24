@@ -600,6 +600,14 @@ export default function ProjectDetail() {
       </div>
     )
   }
+  if (data.error) {
+    return (
+      <EmptyState
+        title={data.error.includes('无权') ? '无权访问该项目' : '项目不存在或已删除'}
+        hint={data.error.includes('无权') ? '你不是该项目成员，如需访问请联系项目负责人' : '返回项目列表查看'}
+      />
+    )
+  }
   if (!project) {
     return <EmptyState title="项目不存在或已删除" hint="返回项目列表查看" />
   }

@@ -790,10 +790,10 @@ function initSystemTemplates() {
   const now = new Date().toISOString()
   const id = () => crypto.randomUUID()
 
-  // 网站开发模板
+  // 新规开发模板（v1.9.2 由「网站开发模板」更名）
   const webDevTemplateId = id()
   db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
-    webDevTemplateId, '网站开发模板', '适用于网站开发项目的标准流程模板', '开发项目', now
+    webDevTemplateId, '新规开发模板', '适用于新规开发项目的标准流程模板', '开发项目', now
   )
   const webDevTasks = [
     { title: '需求分析与调研', description: '收集用户需求，进行竞品分析', status: 'todo', priority: 'high', labels: ['需求'], sortOrder: 0 },
@@ -1020,7 +1020,8 @@ try {
 // 补齐存量库系统模板的分类（v1.8.6：系统模板在历史库中已存在，seed 守卫会跳过重插，这里按名称回填分类）
 try {
   const systemCategoryMap: Record<string, string> = {
-    '网站开发模板': '开发项目',
+    '新规开发模板': '开发项目',
+    '网站开发模板': '开发项目', // 兼容更名前的历史库名称
     '产品迭代模板': '产品迭代',
     '客户支持模板': '运维项目',
   }

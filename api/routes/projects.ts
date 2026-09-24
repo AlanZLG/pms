@@ -10,7 +10,7 @@ import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.t
 import { pushFeishuNotification } from '../lib/notifier.ts'
 import { ApiError } from '../lib/utils.ts'
 import { normalizeProjectType } from '../../shared/types.ts'
-import type { ProjectStatus, MemberRole } from '../../shared/types.ts'
+import type { Project, ProjectStatus, MemberRole, User } from '../../shared/types.ts'
 
 const router = Router()
 router.use(authRequired)
@@ -81,15 +81,26 @@ router.get('/pending-deletions', requirePermission('project.approve_delete'), (r
   } catch (e) { next(e) }
 })
 
+// 项目读取守卫（v1.9.2）：admin/finance 全局放行，其余须为项目负责人或项目成员。
+// 供 tasks/budgets 等项目级 GET 路由复用，保证「概览可见、详情有权限」。
+export function assertProjectReadAccess(user: User | undefined, projectId: string): Project {
+  const project = projectRepo.findById(projectId)
+  if (!project) throw new ApiError(404, '项目不存在')
+  if (!user) throw new ApiError(401, '未登录')
+  if (user.role === 'admin' || user.role === 'finance') return project
+  if (project.ownerId === user.id) return project
+  if (projectRepo.members(project.id).some((m) => m.userId === user.id)) return project
+  throw new ApiError(403, '无权查看该项目')
+}
+
 // 详情
 router.get('/:projectId', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const project = projectRepo.findById(req.params.projectId)
-    if (!project) throw new ApiError(404, '项目不存在')
+    const project = assertProjectReadAccess(userRepo.findById(req.userId!), req.params.projectId)
     if (project.startDate) {
       projectRepo.updateProgress(project.id)
     }
-    res.json({ project: projectRepo.findById(req.params.projectId)! })
+    res.json({ project: projectRepo.findById(project.id)! })
   } catch (e) { next(e) }
 })
 
@@ -347,14 +358,13 @@ router.delete('/:projectId/members/:userId', (req: AuthRequest, res: Response, n
 // 获取看板列配置
 router.get('/:projectId/kanban-columns', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const project = projectRepo.findById(req.params.projectId)
-    if (!project) throw new ApiError(404, '项目不存在')
+    const project = assertProjectReadAccess(userRepo.findById(req.userId!), req.params.projectId)
 
     // 检查是否已有配置，没有则初始化默认列
-    let columns = kanbanColumnRepo.findByProject(req.params.projectId)
+    let columns = kanbanColumnRepo.findByProject(project.id)
     if (columns.length === 0) {
-      kanbanColumnRepo.initDefaultColumns(req.params.projectId)
-      columns = kanbanColumnRepo.findByProject(req.params.projectId)
+      kanbanColumnRepo.initDefaultColumns(project.id)
+      columns = kanbanColumnRepo.findByProject(project.id)
     }
 
     res.json({ columns })

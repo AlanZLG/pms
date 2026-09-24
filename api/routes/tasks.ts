@@ -9,6 +9,7 @@ import { z } from 'zod'
 import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo, attachmentRepo, dependencyRepo, historyRepo, savedFilterRepo, type AuditRow } from '../repository/repo.ts'
 import db from '../db.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
+import { assertProjectReadAccess } from './projects.ts'
 import { ApiError } from '../lib/utils.ts'
 import { sendMail, taskCompleteEmail } from '../lib/mail.ts'
 import { pushFeishuNotification } from '../lib/notifier.ts'
@@ -85,8 +86,7 @@ const updateSchema = z.object({
 // 列出某项目任务
 router.get('/projects/:projectId/tasks', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const project = projectRepo.findById(req.params.projectId)
-    if (!project) throw new ApiError(404, '项目不存在')
+    const project = assertProjectReadAccess(userRepo.findById(req.userId), req.params.projectId)
 
     // 解析筛选参数
     const filter: TaskFilter = {}
@@ -641,8 +641,7 @@ router.delete('/dependencies/:depId', (req: AuthRequest, res: Response, next: Ne
 // 批量获取项目所有依赖关系
 router.get('/projects/:projectId/dependencies', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const project = projectRepo.findById(req.params.projectId)
-    if (!project) throw new ApiError(404, '项目不存在')
+    const project = assertProjectReadAccess(userRepo.findById(req.userId), req.params.projectId)
     const dependencies = dependencyRepo.findByProject(project.id)
     res.json({ dependencies })
   } catch (e) { next(e) }
