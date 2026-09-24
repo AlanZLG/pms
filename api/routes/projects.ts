@@ -5,8 +5,9 @@ import { z } from 'zod'
 import multer from 'multer'
 import bcrypt from 'bcrypt'
 import ExcelJS from 'exceljs'
-import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo, budgetRepo, notificationRepo } from '../repository/repo.ts'
+import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo, budgetRepo, notificationRepo, historyRepo, activityLogRepo } from '../repository/repo.ts'
 import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.ts'
+import { pushFeishuNotification } from '../lib/notifier.ts'
 import { ApiError } from '../lib/utils.ts'
 import { normalizeProjectType } from '../../shared/types.ts'
 import type { ProjectStatus, MemberRole } from '../../shared/types.ts'
@@ -194,6 +195,76 @@ router.patch('/:projectId', (req: AuthRequest, res: Response, next: NextFunction
     })
     projectRepo.updateProgress(project.id)
     res.json({ project: projectRepo.findById(project.id)! })
+  } catch (e) { next(e) }
+})
+
+// 管理员指派项目负责人：新负责人获得该项目全部管理权限，原负责人降为编辑成员
+router.patch('/:projectId/owner', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const current = userRepo.findById(req.userId!)
+    if (current?.role !== 'admin') throw new ApiError(403, '仅系统管理员可指派项目负责人')
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    const parsed = z.object({ userId: z.string() }).safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const target = userRepo.findById(parsed.data.userId)
+    if (!target) throw new ApiError(404, '用户不存在')
+    if (target.id === project.ownerId) throw new ApiError(400, '该用户已是项目负责人')
+    const updated = projectRepo.transferOwnership(project.id, target.id, project.ownerId)
+    activityLogRepo.create(project.id, req.userId!, 'owner_transfer', `项目负责人: ${project.ownerName || '原负责人'} → ${target.name}`)
+    res.json({ project: updated })
+  } catch (e) { next(e) }
+})
+
+// 人员替换：把项目内原成员的所有任务/子任务指派一键转给新成员（负责人或管理员）
+router.post('/:projectId/reassign', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    const current = userRepo.findById(req.userId!)
+    if (project.ownerId !== req.userId && current?.role !== 'admin') {
+      throw new ApiError(403, '仅项目负责人或系统管理员可执行人员替换')
+    }
+    const parsed = z.object({ fromUserId: z.string(), toUserId: z.string() }).safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const from = userRepo.findById(parsed.data.fromUserId)
+    const to = userRepo.findById(parsed.data.toUserId)
+    if (!from || !to) throw new ApiError(404, '用户不存在')
+    if (from.id === to.id) throw new ApiError(400, '替换前后的成员不能相同')
+    if (to.role === 'guest') throw new ApiError(400, '访客角色无任务指派资格，不能作为替换目标')
+
+    const { taskIds, subtaskCount } = taskRepo.reassignProjectTasks(project.id, from.id, to.id)
+    // 项目级操作日志：一条汇总留痕（任务级明细另见 task_history）
+    activityLogRepo.create(project.id, req.userId!, 'reassign',
+      `人员替换: ${from.name} → ${to.name}，涉及 ${taskIds.length} 个任务、${subtaskCount} 个子任务`)
+    // 每个受影响任务写一条指派变更历史，保证任务时间线可追溯
+    const label = `负责人: ${from.name} → ${to.name}（人员替换）`
+    for (const taskId of taskIds) historyRepo.create(taskId, req.userId!, 'assignee_change', label)
+    // 汇总通知：新成员接手 N 个任务、原成员任务已转派
+    if (taskIds.length > 0) {
+      try {
+        if (to.id !== req.userId) {
+          notificationRepo.create({ userId: to.id, type: 'assign', title: `你接手了 ${taskIds.length} 个任务`, body: `「${project.name}」中原「${from.name}」的任务已转给你`, projectId: project.id })
+          pushFeishuNotification(to.id, 'assign', `你接手了 ${taskIds.length} 个任务`, `「${project.name}」中原「${from.name}」的任务已转给你`)
+        }
+        if (from.id !== req.userId) {
+          notificationRepo.create({ userId: from.id, type: 'assign', title: `你的 ${taskIds.length} 个任务已转派`, body: `「${project.name}」中你的任务已转给「${to.name}」`, projectId: project.id })
+          pushFeishuNotification(from.id, 'assign', `你的 ${taskIds.length} 个任务已转派`, `「${project.name}」中你的任务已转给「${to.name}」`)
+        }
+      } catch {
+        // 忽略替换通知发送失败
+      }
+    }
+    res.json({ replacedTasks: taskIds.length, replacedSubtasks: subtaskCount })
+  } catch (e) { next(e) }
+})
+
+// 项目操作日志（负责人转移、人员替换等项目维度操作），项目成员可查看
+router.get('/:projectId/activities', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    res.json({ rows: activityLogRepo.findByProject(project.id) })
   } catch (e) { next(e) }
 })
 

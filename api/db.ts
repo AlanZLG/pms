@@ -573,6 +573,17 @@ CREATE TABLE IF NOT EXISTS task_history (
 CREATE INDEX IF NOT EXISTS idx_history_task ON task_history(task_id);
 CREATE INDEX IF NOT EXISTS idx_history_user ON task_history(user_id);
 
+-- 项目级操作日志：记录负责人转移、人员替换等项目维度操作（任务级明细在 task_history）
+CREATE TABLE IF NOT EXISTS project_activity_log (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  action TEXT NOT NULL,
+  detail TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pactivity_project ON project_activity_log(project_id, created_at);
+
 CREATE TABLE IF NOT EXISTS op_logs (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,

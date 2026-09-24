@@ -38,6 +38,9 @@ import {
   Trash,
   Settings2,
   Users,
+  ArrowLeftRight,
+  Replace,
+  History,
 } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
@@ -131,6 +134,16 @@ export default function ProjectDetail() {
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([])
   const [saveFilterName, setSaveFilterName] = useState('')
   const [showSaveDialog, setShowSaveDialog] = useState(false)
+  // 管理员指派项目负责人
+  const [transferOpen, setTransferOpen] = useState(false)
+  const [transferUserId, setTransferUserId] = useState('')
+  // 人员替换：项目内存量任务指派一键转给新成员
+  const [reassignOpen, setReassignOpen] = useState(false)
+  const [reassignFrom, setReassignFrom] = useState('')
+  const [reassignTo, setReassignTo] = useState('')
+  // 项目操作日志
+  const [activityOpen, setActivityOpen] = useState(false)
+  const activityRows = useAsync(() => api.getProjectActivities(projectId))
 
   // 看板列配置
   const [kanbanColumns, setKanbanColumns] = useState<KanbanColumn[]>([])
@@ -650,6 +663,28 @@ export default function ProjectDetail() {
           <Button variant="ghost" size="sm" onClick={() => setProjectDialogOpen(true)}>
             <Pencil className="h-3.5 w-3.5" /> 编辑项目
           </Button>
+          {currentUser.role === 'admin' && (
+            <Button
+              variant="ghost" size="sm"
+              onClick={() => { setTransferUserId(project.ownerId); setTransferOpen(true) }}
+            >
+              <ArrowLeftRight className="h-3.5 w-3.5" /> 指派负责人
+            </Button>
+          )}
+          {(currentUser.role === 'admin' || currentUser.id === project.ownerId) && (
+            <Button
+              variant="ghost" size="sm"
+              onClick={() => { setReassignFrom(''); setReassignTo(''); setReassignOpen(true) }}
+            >
+              <Replace className="h-3.5 w-3.5" /> 替换成员
+            </Button>
+          )}
+          <Button
+            variant="ghost" size="sm"
+            onClick={() => { setActivityOpen(true); activityRows.reload() }}
+          >
+            <History className="h-3.5 w-3.5" /> 操作日志
+          </Button>
           {project.projectType === '运维增强' && !project.mergedIntoProjectId && currentUser
             && (currentUser.role === 'admin' || currentUser.id === project.ownerId) && (
             <Button variant="ghost" size="sm" onClick={() => setMergeDialogOpen(true)}>
@@ -1034,8 +1069,8 @@ export default function ProjectDetail() {
 
       {/* 保存筛选方案对话框 */}
       {showSaveDialog && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-full max-w-md rounded-xl bg-bg-panel p-6 shadow-lg">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-bg-panel p-6 shadow-lg">
             <h3 className="mb-4 text-lg font-medium text-text-primary">保存筛选方案</h3>
             <Input
               placeholder="方案名称"
@@ -1050,6 +1085,137 @@ export default function ProjectDetail() {
               <Button onClick={handleSaveFilter}>
                 保存
               </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* 管理员指派项目负责人弹窗 */}
+      {transferOpen && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-bg-panel p-6 shadow-lg">
+            <h3 className="mb-1 text-lg font-medium text-text-primary">指派项目负责人</h3>
+            <p className="mb-4 text-xs text-muted">新负责人将获得该项目全部管理权限（编辑、成员、看板、删除），原负责人降为编辑成员</p>
+            <select
+              value={transferUserId}
+              onChange={(e) => setTransferUserId(e.target.value)}
+              className="mb-4 w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-sm text-text-primary outline-none focus:border-brand"
+            >
+              {allUsers.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setTransferOpen(false)}>
+                取消
+              </Button>
+              <Button
+                disabled={!transferUserId || transferUserId === project.ownerId}
+                onClick={async () => {
+                  try {
+                    await api.transferOwnership(project.id, transferUserId)
+                    notify('success', '项目负责人已更新')
+                    setTransferOpen(false)
+                    data.reload()
+                  } catch (e) {
+                    notify('error', getErrorMessage(e, '指派失败'))
+                  }
+                }}
+              >
+                确认指派
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* 人员替换弹窗：把项目内原成员的所有任务/子任务指派一键转给新成员 */}
+      {reassignOpen && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-xl bg-bg-panel p-6 shadow-lg">
+            <h3 className="mb-1 text-lg font-medium text-text-primary">替换成员</h3>
+            <p className="mb-4 text-xs text-muted">
+              将「{tasks.filter((t) => t.assigneeId === reassignFrom).length} 个任务及其子任务」的指派从原成员转给新成员（不可撤销）
+            </p>
+            <div className="mb-3">
+              <label className="mb-1 block text-xs font-medium text-muted">原成员（当前被指派）</label>
+              <select
+                value={reassignFrom}
+                onChange={(e) => { setReassignFrom(e.target.value); setReassignTo('') }}
+                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-sm text-text-primary outline-none focus:border-brand"
+              >
+                <option value="">请选择</option>
+                {(() => {
+                  const ids = new Set(tasks.map((t) => t.assigneeId).filter(Boolean) as string[])
+                  return allUsers.filter((u) => ids.has(u.id)).map((u) => (
+                    <option key={u.id} value={u.id}>{u.name}</option>
+                  ))
+                })()}
+              </select>
+            </div>
+            <div className="mb-4">
+              <label className="mb-1 block text-xs font-medium text-muted">新成员</label>
+              <select
+                value={reassignTo}
+                onChange={(e) => setReassignTo(e.target.value)}
+                className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-1.5 text-sm text-text-primary outline-none focus:border-brand"
+              >
+                <option value="">请选择</option>
+                {allUsers.filter((u) => u.role !== 'guest' && u.id !== reassignFrom).map((u) => (
+                  <option key={u.id} value={u.id}>{u.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setReassignOpen(false)}>
+                取消
+              </Button>
+              <Button
+                disabled={!reassignFrom || !reassignTo}
+                onClick={async () => {
+                  try {
+                    const r = await api.reassignTasks(project.id, reassignFrom, reassignTo)
+                    notify('success', `已替换 ${r.replacedTasks} 个任务、${r.replacedSubtasks} 个子任务的指派`)
+                    setReassignOpen(false)
+                    data.reload()
+                  } catch (e) {
+                    notify('error', getErrorMessage(e, '替换失败'))
+                  }
+                }}
+              >
+                确认替换
+              </Button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* 项目操作日志弹窗 */}
+      {activityOpen && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+          <div className="flex max-h-[70vh] w-full max-w-lg flex-col rounded-xl bg-bg-panel p-6 shadow-lg">
+            <h3 className="mb-4 text-lg font-medium text-text-primary">项目操作日志</h3>
+            <div className="mb-4 flex-1 space-y-2.5 overflow-y-auto">
+              {(activityRows.data?.rows ?? []).length === 0 && (
+                <p className="py-6 text-center text-sm text-muted">暂无操作日志</p>
+              )}
+              {(activityRows.data?.rows ?? []).map((r) => (
+                <div key={r.id} className="rounded-lg border border-bg-border bg-bg-soft px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-text-primary">
+                      {r.action === 'reassign' ? '人员替换' : r.action === 'owner_transfer' ? '负责人转移' : r.action}
+                    </span>
+                    <span className="text-xs text-muted">{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted">{r.userName}：{r.detail}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <Button variant="ghost" onClick={() => setActivityOpen(false)}>关闭</Button>
             </div>
           </div>
         </div>,

@@ -141,6 +141,34 @@ export const projectRepo = {
     `).get(id) as SqlRow
     return row ? rowToProject(row) : null
   },
+  // 每个用户名下（作为负责人）的未删除项目名列表：团队页成员卡片展示「名下项目」用
+  ownedNamesByOwner(): Record<string, string[]> {
+    const rows = db.prepare(
+      "SELECT owner_id, GROUP_CONCAT(name, '、') AS names FROM projects WHERE deleted_at IS NULL GROUP BY owner_id",
+    ).all() as SqlRow[]
+    const out: Record<string, string[]> = {}
+    for (const r of rows) out[r.owner_id as string] = (r.names as string | null)?.split('、') ?? []
+    return out
+  },
+  // 转移项目负责人（仅管理员调用，事务）：新负责人获得该项目全部管理权限；
+  // 新负责人成员行补插或升级为 owner，原负责人成员行降为 editor
+  transferOwnership(projectId: string, newOwnerId: string, oldOwnerId: string): Project | null {
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE projects SET owner_id = ? WHERE id = ?').run(newOwnerId, projectId)
+      const existing = db.prepare('SELECT id FROM project_members WHERE project_id = ? AND user_id = ?')
+        .get(projectId, newOwnerId) as SqlRow | undefined
+      if (existing) {
+        db.prepare("UPDATE project_members SET role = 'owner' WHERE id = ?").run(existing.id)
+      } else {
+        db.prepare('INSERT INTO project_members (id, project_id, user_id, role, joined_at) VALUES (?,?,?,?,?)')
+          .run(genId(), projectId, newOwnerId, 'owner', new Date().toISOString())
+      }
+      db.prepare("UPDATE project_members SET role = 'editor' WHERE project_id = ? AND user_id = ? AND role = 'owner'")
+        .run(projectId, oldOwnerId)
+    })
+    tx()
+    return this.findById(projectId)
+  },
   findByIdWithTrash(id: string): Project | null {
     const row = db.prepare(`
       SELECT p.*, u.name as owner_name, u.email as owner_email, u.avatar_color as owner_avatar
@@ -304,6 +332,24 @@ export const projectRepo = {
 
 // ===== Tasks =====
 export const taskRepo = {
+  // 项目内人员替换：把 from 的所有任务/子任务指派批量转移给 to（事务）
+  // 返回受影响主任务 id 列表与子任务数量，供路由层写操作历史与通知
+  reassignProjectTasks(projectId: string, fromUserId: string, toUserId: string): { taskIds: string[]; subtaskCount: number } {
+    const tx = db.transaction(() => {
+      const rows = db.prepare('SELECT id FROM tasks WHERE project_id = ? AND assignee_id = ? AND deleted_at IS NULL')
+        .all(projectId, fromUserId) as SqlRow[]
+      const taskIds = rows.map((r) => r.id as string)
+      const subtaskCount = db.prepare(
+        'UPDATE subtasks SET assignee_id = ? WHERE assignee_id = ? AND task_id IN (SELECT id FROM tasks WHERE project_id = ? AND deleted_at IS NULL)',
+      ).run(toUserId, fromUserId, projectId).changes
+      if (taskIds.length) {
+        db.prepare(`UPDATE tasks SET assignee_id = ? WHERE id IN (${taskIds.map(() => '?').join(',')})`)
+          .run(toUserId, ...taskIds)
+      }
+      return { taskIds, subtaskCount }
+    })
+    return tx()
+  },
   search(keyword: string, projectIds: string[] | null): Task[] {
     const likeKeyword = `%${keyword}%`
     let sql = `
@@ -663,6 +709,31 @@ export const historyRepo = {
   },
 }
 
+/** 项目级操作日志（负责人转移、人员替换等项目维度操作的留痕与查询） */
+export const activityLogRepo = {
+  create(projectId: string, userId: string, action: string, detail?: string): void {
+    db.prepare('INSERT INTO project_activity_log (id, project_id, user_id, action, detail, created_at) VALUES (?,?,?,?,?,?)')
+      .run(genId(), projectId, userId, action, detail || null, new Date().toISOString())
+  },
+  findByProject(projectId: string, limit = 50): Array<{ id: string; action: string; detail: string | null; userName: string; createdAt: string }> {
+    const rows = db.prepare(`
+      SELECT l.id, l.action, l.detail, l.created_at, u.name as user_name
+      FROM project_activity_log l
+      JOIN users u ON l.user_id = u.id
+      WHERE l.project_id = ?
+      ORDER BY l.created_at DESC
+      LIMIT ?
+    `).all(projectId, limit) as SqlRow[]
+    return rows.map((r) => ({
+      id: r.id as string,
+      action: r.action as string,
+      detail: (r.detail as string | null) ?? null,
+      userName: r.user_name as string,
+      createdAt: r.created_at as string,
+    }))
+  },
+}
+
 // ===== Subtasks =====
 export const subtaskRepo = {
   findByTask(taskId: string): Subtask[] {
@@ -931,6 +1002,7 @@ function rowToProject(r: SqlRow): Project {
     status: r.status, projectType: (r.project_type as ProjectType) || null,
     mergedIntoProjectId: r.merged_into_project_id || null,
     ownerId: r.owner_id, progress: r.progress,
+    ownerName: r.owner_name || '', ownerAvatar: r.owner_avatar || '',
     startDate: r.start_date || null, dueDate: r.due_date, createdAt: r.created_at,
     deletedAt: r.deleted_at || null,
     deleteRequestedBy: r.delete_requested_by || null,

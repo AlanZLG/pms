@@ -265,9 +265,14 @@ export default function Team() {
                   </>
                 )}
               </div>
-              <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="mt-4 grid grid-cols-4 gap-2 text-center">
                 <Stat label="负责" value={u.taskCount} />
                 <Stat label="进行中" value={u.activeCount} />
+                <Stat
+                  label="名下项目"
+                  value={(u.ownedProjectNames ?? []).length}
+                  title={(u.ownedProjectNames ?? []).length ? (u.ownedProjectNames ?? []).join('、') : '未负责任何项目'}
+                />
                 <Stat label="角色" value={roleLabel(u.role)} text />
               </div>
               <div className="mt-3">
@@ -353,8 +358,8 @@ export default function Team() {
       )}
 
       {showCategoryDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCategoryDialog(false)}>
-          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCategoryDialog(false)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-h-[85vh] overflow-y-auto max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display text-lg text-text-primary">{editingCategory ? '编辑类别' : '添加人员类别'}</h3>
               <Button variant="ghost" size="sm" onClick={() => setShowCategoryDialog(false)}>
@@ -388,8 +393,8 @@ export default function Team() {
       )}
 
       {showCreateDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowCreateDialog(false)}>
-          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreateDialog(false)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-h-[85vh] overflow-y-auto max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display text-lg text-text-primary">新建成员</h3>
               <Button variant="ghost" size="sm" onClick={() => setShowCreateDialog(false)}>
@@ -429,8 +434,8 @@ export default function Team() {
       )}
 
       {editTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditTarget(null)}>
-          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setEditTarget(null)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-h-[85vh] overflow-y-auto max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display text-lg text-text-primary">维护成员信息</h3>
               <Button variant="ghost" size="sm" onClick={() => setEditTarget(null)}>
@@ -461,8 +466,8 @@ export default function Team() {
       )}
 
       {userCostDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setUserCostDialog(null)}>
-          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setUserCostDialog(null)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-h-[85vh] overflow-y-auto max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display text-lg text-text-primary">配置成本信息</h3>
               <Button variant="ghost" size="sm" onClick={() => setUserCostDialog(null)}>
@@ -503,9 +508,9 @@ export default function Team() {
   )
 }
 
-function Stat({ label, value, text }: { label: string; value: number | string; text?: boolean }) {
+function Stat({ label, value, text, title }: { label: string; value: number | string; text?: boolean; title?: string }) {
   return (
-    <div className="rounded-lg bg-bg-soft py-2">
+    <div className="rounded-lg bg-bg-soft py-2" title={title}>
       {text ? (
         <p className="text-xs text-text-secondary">{value}</p>
       ) : (

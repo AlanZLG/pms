@@ -189,7 +189,12 @@ export default function Projects() {
                   </div>
                 </div>
                 <div className="flex items-center justify-between">
-                  <div className="flex -space-x-2">
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 text-xs text-muted" title="项目负责人">
+                      <span className="h-2 w-2 rounded-full" style={{ background: p.ownerAvatar || '#475569' }} />
+                      <span className="max-w-[8rem] truncate text-text-secondary">{p.ownerName}</span>
+                    </div>
+                    <div className="flex -space-x-2">
                     {p.members.slice(0, 4).map((m) => (
                       <Avatar
                         key={m.userId}
@@ -208,6 +213,7 @@ export default function Projects() {
                         0
                       </div>
                     )}
+                    </div>
                   </div>
                   <span className="text-xs text-muted">
                     {p.dueDate ? `截止 ${fmtDate(p.dueDate, 'MM-dd')}` : '无截止'}
@@ -230,8 +236,8 @@ export default function Projects() {
       />
 
       {rejecting && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg text-text-primary">驳回删除申请</h3>
               <button onClick={() => setRejecting(null)} className="p-1 text-muted hover:text-text-primary">

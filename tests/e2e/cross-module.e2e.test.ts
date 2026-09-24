@@ -215,6 +215,15 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(p.projectType).toBe('运维项目')
   })
 
+  it('项目列表回带负责人姓名与头像色（ownerName/ownerAvatar）', async () => {
+    const r = await req('GET', '/projects', undefined, adminToken)
+    expect(r.status).toBe(200)
+    const list = r.json.projects as Array<{ id: string; ownerName?: string; ownerAvatar?: string }>
+    const target = list.find((x) => x.id === projectId)
+    expect(target?.ownerName).toBeTruthy()
+    expect(target?.ownerAvatar).toBeTruthy()
+  })
+
   it('添加成员到项目 → 200', async () => {
     const r = await req('POST', `/projects/${projectId}/members`, { userId: memberId, role: 'editor' }, adminToken)
     expect(r.status).toBe(200)
@@ -482,5 +491,116 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     const team = await req('GET', '/team', undefined, adminToken)
     expect(team.status).toBe(200)
     expect((team.json.users as Array<{ id: string }>).map((u) => u.id)).not.toContain(tempUserId)
+  })
+
+  it('角色分配：admin 将成员改为项目核算人员，成员视角确认生效', async () => {
+    const email = `e2e-role-${Date.now()}@pm.dev`
+    const created = await req('POST', '/team', { email, password: 'role-pass-123', name: 'E2E角色成员', role: 'member' }, adminToken)
+    expect(created.status).toBe(201)
+    const uid = (created.json.user as { id: string }).id
+
+    const upd = await req('PATCH', `/team/${uid}/role`, { role: 'finance' }, adminToken)
+    expect(upd.status).toBe(200)
+    expect((upd.json.user as { role: string }).role).toBe('finance')
+
+    const login = await req('POST', '/auth/login', { email, password: 'role-pass-123' })
+    expect(login.status).toBe(200)
+    const me = await req('GET', '/auth/me', undefined, (login.json as { token: string }).token)
+    expect((me.json.user as { role: string }).role).toBe('finance')
+
+    const back = await req('PATCH', `/team/${uid}/role`, { role: 'owner' }, adminToken)
+    expect(back.status).toBe(200)
+    expect((back.json.user as { role: string }).role).toBe('owner')
+  })
+
+  it('指派项目负责人：admin 指派 → 新负责人全权限、原负责人降级、守卫齐全', async () => {
+    // 成员建项目（owner=memberId）
+    const created = await req('POST', '/projects', { name: `指派测试${Date.now()}`, projectType: '开发项目' }, memberToken)
+    expect(created.status).toBe(201)
+    const pid = (created.json.project as { id: string }).id
+
+    // 非管理员无权指派
+    const forbidden = await req('PATCH', `/projects/${pid}/owner`, { userId: adminId }, memberToken)
+    expect(forbidden.status).toBe(403)
+
+    // admin 指派自己为新负责人
+    const upd = await req('PATCH', `/projects/${pid}/owner`, { userId: adminId }, adminToken)
+    expect(upd.status).toBe(200)
+    expect((upd.json.project as { ownerId: string }).ownerId).toBe(adminId)
+
+    // 原负责人失去管理权（改名 403）
+    const oldOwnerPatch = await req('PATCH', `/projects/${pid}`, { name: '不应成功' }, memberToken)
+    expect(oldOwnerPatch.status).toBe(403)
+
+    // 新负责人拥有全部权限（改名成功）
+    const newOwnerPatch = await req('PATCH', `/projects/${pid}`, { name: `已易主${Date.now()}` }, adminToken)
+    expect(newOwnerPatch.status).toBe(200)
+
+    // 已是负责人再指派 → 400
+    const dup = await req('PATCH', `/projects/${pid}/owner`, { userId: adminId }, adminToken)
+    expect(dup.status).toBe(400)
+
+    await req('DELETE', `/projects/${pid}`, undefined, adminToken)
+  })
+
+  it('人员替换：一键把成员的项目任务转给另一成员，计数与守卫齐全', async () => {
+    // 成员建项目 + 1 指派任务 + 1 指派子任务
+    const proj = await req('POST', '/projects', { name: `替换测试${Date.now()}`, projectType: '开发项目' }, memberToken)
+    expect(proj.status).toBe(201)
+    const pid = (proj.json.project as { id: string }).id
+    const task = await req('POST', `/projects/${pid}/tasks`, { title: '被替换的任务', assigneeId: memberId }, memberToken)
+    expect(task.status).toBe(201)
+    const tid = (task.json.task as { id: string }).id
+    const sub = await req('POST', `/tasks/${tid}/subtasks`, { title: '被替换的子任务', assigneeId: memberId }, memberToken)
+    expect(sub.status).toBe(201)
+
+    // 守卫：from = to 400
+    const same = await req('POST', `/projects/${pid}/reassign`, { fromUserId: memberId, toUserId: memberId }, adminToken)
+    expect(same.status).toBe(400)
+    // 守卫：目标为访客 400
+    const team = await req('GET', '/team', undefined, adminToken)
+    const guestId = (team.json.users as Array<{ id: string; role: string }>).find((u) => u.role === 'guest')?.id
+    if (guestId) {
+      const toGuest = await req('POST', `/projects/${pid}/reassign`, { fromUserId: memberId, toUserId: guestId }, adminToken)
+      expect(toGuest.status).toBe(400)
+    }
+
+    // 执行替换：member → admin
+    const r = await req('POST', `/projects/${pid}/reassign`, { fromUserId: memberId, toUserId: adminId }, adminToken)
+    expect(r.status).toBe(200)
+    expect((r.json as { replacedTasks: number }).replacedTasks).toBe(1)
+    expect((r.json as { replacedSubtasks: number }).replacedSubtasks).toBe(1)
+
+    // 验证任务与子任务指派已变更
+    const detail = await req('GET', `/tasks/${tid}`, undefined, adminToken)
+    expect((detail.json.task as { assigneeId: string | null }).assigneeId).toBe(adminId)
+    const subtasks = detail.json.subtasks as Array<{ assigneeId: string | null }>
+    expect(subtasks[0].assigneeId).toBe(adminId)
+
+    // 项目操作日志：一条汇总留痕
+    const acts = await req('GET', `/projects/${pid}/activities`, undefined, adminToken)
+    expect(acts.status).toBe(200)
+    const actRows = acts.json.rows as Array<{ action: string; detail: string }>
+    expect(actRows).toHaveLength(1)
+    expect(actRows[0].action).toBe('reassign')
+    expect(actRows[0].detail).toContain('人员替换')
+    expect(actRows[0].detail).toContain('1 个任务')
+
+    // 守卫：既非负责人又非 admin 的用户 403（新建一个旁观成员验证）
+    const bystanderEmail = `e2e-bystander-${Date.now()}@pm.dev`
+    await req('POST', '/team', { email: bystanderEmail, password: 'by-pass-123', name: 'E2E旁观成员', role: 'member' }, adminToken)
+    const byLogin = await req('POST', '/auth/login', { email: bystanderEmail, password: 'by-pass-123' })
+    const byToken = (byLogin.json as { token: string }).token
+    const forbidden = await req('POST', `/projects/${pid}/reassign`, { fromUserId: memberId, toUserId: adminId }, byToken)
+    expect(forbidden.status).toBe(403)
+
+    await req('DELETE', `/projects/${pid}`, undefined, adminToken)
+  })
+
+  it('角色分配守卫：非管理员 403 / 非法角色 400', async () => {
+    const forbidden = await req('PATCH', `/team/${memberId}/role`, { role: 'admin' }, memberToken)
+    expect(forbidden.status).toBe(403)
+    const badRole = await req('PATCH', `/team/${memberId}/role`, { role: 'superadmin' }, adminToken)
+    expect(badRole.status).toBe(400)
   })
 })

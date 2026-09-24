@@ -99,6 +99,15 @@ export const api = {
     request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
   updateProject: (id: string, data: Partial<Project>) =>
     request<{ project: Project }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // 管理员指派项目负责人
+  transferOwnership: (id: string, userId: string) =>
+    request<{ project: Project }>(`/api/projects/${id}/owner`, { method: 'PATCH', body: JSON.stringify({ userId }) }),
+  // 人员替换：项目内原成员的所有任务/子任务指派一键转给新成员
+  reassignTasks: (id: string, fromUserId: string, toUserId: string) =>
+    request<{ replacedTasks: number; replacedSubtasks: number }>(`/api/projects/${id}/reassign`, { method: 'POST', body: JSON.stringify({ fromUserId, toUserId }) }),
+  // 项目操作日志（负责人转移、人员替换等）
+  getProjectActivities: (id: string) =>
+    request<{ rows: Array<{ id: string; action: string; detail: string | null; userName: string; createdAt: string }> }>(`/api/projects/${id}/activities`),
   deleteProject: (id: string) =>
     request<{ ok?: boolean; pendingApproval?: boolean; message?: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
   listPendingDeletions: () => request<{ projects: Project[] }>('/api/projects/pending-deletions'),

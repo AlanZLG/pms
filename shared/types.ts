@@ -73,6 +73,8 @@ export interface User {
   customRole?: CustomRole | null
   taskCount?: number
   activeCount?: number
+  /** 名下（作为负责人）未删除项目名列表，团队页展示用 */
+  ownedProjectNames?: string[]
 }
 
 export interface Project {
@@ -82,6 +84,9 @@ export interface Project {
   status: ProjectStatus
   projectType?: ProjectType | null
   ownerId: string
+  /** 项目负责人姓名与头像色（列表/详情 JOIN users 带出） */
+  ownerName?: string
+  ownerAvatar?: string
   members: ProjectMember[]
   progress: number
   startDate: string | null

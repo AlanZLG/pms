@@ -3,7 +3,7 @@
 import { Router, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
 import bcrypt from 'bcrypt'
-import { userRepo, taskRepo, categoryRepo, customRoleRepo, rolePermissionRepo } from '../repository/repo.ts'
+import { userRepo, taskRepo, projectRepo, categoryRepo, customRoleRepo, rolePermissionRepo } from '../repository/repo.ts'
 import { authRequired, financeRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import type { UserRole } from '../../shared/types.ts'
@@ -112,10 +112,12 @@ router.get('/', (req: AuthRequest, res: Response, next: NextFunction) => {
         limited: true,
       })
     }
+    const ownedMap = projectRepo.ownedNamesByOwner()
     const list = users.map((u) => ({
       ...u,
       taskCount: taskRepo.findByAssigneeAll(u.id).length,
       activeCount: taskRepo.findByAssignee(u.id).length,
+      ownedProjectNames: ownedMap[u.id] || [],
     }))
     res.json({ users: list })
   } catch (e) { next(e) }
