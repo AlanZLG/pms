@@ -5,6 +5,7 @@ import path from 'path'
 import fs from 'fs'
 import bcrypt from 'bcrypt'
 import crypto from 'crypto'
+import { SYSTEM_TEMPLATE_DEFS, type SystemTemplateDef } from './lib/systemTemplates.ts'
 
 // 以 cwd(项目根)为基准存放数据库,避开 tsx 临时目录问题
 // 可用 FORTUNE_DB_PATH 覆盖（e2e 集成测试用临时库，避免触碰生产数据）
@@ -782,239 +783,59 @@ try {
   console.error('[seed] error:', e)
 }
 
-// 初始化系统预设模板
+// 初始化系统预设模板（v1.9.3 统一按名称幂等：新库全量插入，存量库自动补插缺失模板；
+// 存量模板的任务/看板列可能已被用户调整故不覆盖，仅当从未初始化预算时回填初始预算）
 function initSystemTemplates() {
-  const templateCount = (db.prepare('SELECT COUNT(*) as c FROM project_templates WHERE is_system = 1').get() as { c: number }).c
-  if (templateCount > 0) return
-
   const now = new Date().toISOString()
   const id = () => crypto.randomUUID()
 
-  // 新规开发模板（v1.9.2 由「网站开发模板」更名）
-  const webDevTemplateId = id()
-  db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
-    webDevTemplateId, '新规开发模板', '适用于新规开发项目的标准流程模板', '开发项目', now
-  )
-  const webDevTasks = [
-    { title: '需求分析与调研', description: '收集用户需求，进行竞品分析', status: 'todo', priority: 'high', labels: ['需求'], sortOrder: 0 },
-    { title: '原型设计', description: '设计产品原型和交互流程', status: 'todo', priority: 'high', labels: ['设计'], sortOrder: 1 },
-    { title: 'UI设计', description: '视觉设计和设计稿输出', status: 'todo', priority: 'high', labels: ['设计'], sortOrder: 2 },
-    { title: '前端开发', description: '前端页面开发与交互实现', status: 'todo', priority: 'high', labels: ['前端'], sortOrder: 3 },
-    { title: '后端开发', description: '后端API开发与数据库设计', status: 'todo', priority: 'high', labels: ['后端'], sortOrder: 4 },
-    { title: '功能测试', description: '功能测试和Bug修复', status: 'todo', priority: 'medium', labels: ['测试'], sortOrder: 5 },
-    { title: '性能优化', description: '性能优化和代码审查', status: 'todo', priority: 'medium', labels: ['优化'], sortOrder: 6 },
-    { title: '上线部署', description: '部署上线和监控配置', status: 'todo', priority: 'high', labels: ['运维'], sortOrder: 7 },
-  ]
-  webDevTasks.forEach(task => {
-    db.prepare(`INSERT INTO template_tasks (id, template_id, title, description, status, priority, labels, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), webDevTemplateId, task.title, task.description, task.status, task.priority, JSON.stringify(task.labels), task.sortOrder, now
+  const insertTemplateDef = (templateId: string, def: SystemTemplateDef) => {
+    db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
+      templateId, def.name, def.description, def.category, now
     )
-  })
-  const webDevBudgets = [
-    { category: 'labor', description: '人力成本' },
-    { category: 'software', description: '软件工具' },
-  ]
-  webDevBudgets.forEach(budget => {
-    db.prepare(`INSERT INTO template_budgets (id, template_id, category, description, created_at) VALUES (?, ?, ?, ?, ?)`).run(
-      id(), webDevTemplateId, budget.category, budget.description, now
-    )
-  })
-  const webDevColumns = [
-    { statusKey: 'todo', label: '待办', color: '#94A3B8', sortOrder: 0 },
-    { statusKey: 'in_progress', label: '进行中', color: '#F59E0B', sortOrder: 1 },
-    { statusKey: 'review', label: '审核中', color: '#0EA5E9', sortOrder: 2 },
-    { statusKey: 'done', label: '已完成', color: '#10B981', sortOrder: 3 },
-  ]
-  webDevColumns.forEach(col => {
-    db.prepare(`INSERT INTO template_kanban_columns (id, template_id, status_key, label, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), webDevTemplateId, col.statusKey, col.label, col.color, col.sortOrder, now
-    )
-  })
+    def.tasks.forEach((task, sortOrder) => {
+      db.prepare(`INSERT INTO template_tasks (id, template_id, title, description, status, priority, labels, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        id(), templateId, task.title, task.description, task.status, task.priority, JSON.stringify(task.labels), sortOrder, now
+      )
+    })
+    def.budgets.forEach((budget) => {
+      db.prepare(`INSERT INTO template_budgets (id, template_id, category, description, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+        id(), templateId, budget.category, budget.description, now
+      )
+    })
+    def.columns.forEach((col, sortOrder) => {
+      db.prepare(`INSERT INTO template_kanban_columns (id, template_id, status_key, label, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+        id(), templateId, col.statusKey, col.label, col.color, sortOrder, now
+      )
+    })
+  }
 
-  // 产品迭代模板
-  const iterationTemplateId = id()
-  db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
-    iterationTemplateId, '产品迭代模板', '适用于产品迭代更新的敏捷开发模板', '产品迭代', now
-  )
-  const iterationTasks = [
-    { title: '版本规划', description: '确定版本目标和功能范围', status: 'todo', priority: 'high', labels: ['规划'], sortOrder: 0 },
-    { title: '功能开发', description: '新功能开发与实现', status: 'todo', priority: 'high', labels: ['开发'], sortOrder: 1 },
-    { title: '功能测试', description: '新功能测试和回归测试', status: 'todo', priority: 'high', labels: ['测试'], sortOrder: 2 },
-    { title: '灰度发布', description: '灰度发布和监控', status: 'todo', priority: 'medium', labels: ['发布'], sortOrder: 3 },
-    { title: '全量发布', description: '全量发布和公告', status: 'todo', priority: 'medium', labels: ['发布'], sortOrder: 4 },
-  ]
-  iterationTasks.forEach(task => {
-    db.prepare(`INSERT INTO template_tasks (id, template_id, title, description, status, priority, labels, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), iterationTemplateId, task.title, task.description, task.status, task.priority, JSON.stringify(task.labels), task.sortOrder, now
-    )
-  })
-  const iterationBudgets = [
-    { category: 'labor', description: '人力成本' },
-  ]
-  iterationBudgets.forEach(budget => {
-    db.prepare(`INSERT INTO template_budgets (id, template_id, category, description, created_at) VALUES (?, ?, ?, ?, ?)`).run(
-      id(), iterationTemplateId, budget.category, budget.description, now
-    )
-  })
-  const iterationColumns = [
-    { statusKey: 'todo', label: '待办', color: '#94A3B8', sortOrder: 0 },
-    { statusKey: 'in_progress', label: '进行中', color: '#F59E0B', sortOrder: 1 },
-    { statusKey: 'review', label: '审核中', color: '#0EA5E9', sortOrder: 2 },
-    { statusKey: 'done', label: '已完成', color: '#10B981', sortOrder: 3 },
-  ]
-  iterationColumns.forEach(col => {
-    db.prepare(`INSERT INTO template_kanban_columns (id, template_id, status_key, label, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), iterationTemplateId, col.statusKey, col.label, col.color, col.sortOrder, now
-    )
-  })
+  for (const def of SYSTEM_TEMPLATE_DEFS) {
+    const existing = db.prepare('SELECT id FROM project_templates WHERE is_system = 1 AND name = ?').get(def.name) as { id: string } | undefined
+    if (!existing) {
+      insertTemplateDef(id(), def)
+      continue
+    }
+    const budgetCount = (db.prepare('SELECT COUNT(*) as c FROM template_budgets WHERE template_id = ?').get(existing.id) as { c: number }).c
+    if (budgetCount === 0 && def.budgets.length > 0) {
+      for (const budget of def.budgets) {
+        db.prepare(`INSERT INTO template_budgets (id, template_id, category, description, created_at) VALUES (?, ?, ?, ?, ?)`).run(
+          id(), existing.id, budget.category, budget.description, now
+        )
+      }
+      console.log(`[db] 已回填系统模板「${def.name}」的初始预算`)
+    }
+  }
 
-  // 客户支持模板
-  const supportTemplateId = id()
-  db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
-    supportTemplateId, '客户支持模板', '适用于客户支持和问题处理的模板', '运维项目', now
-  )
-  const supportTasks = [
-    { title: '问题接收', description: '接收客户问题和需求', status: 'todo', priority: 'high', labels: ['支持'], sortOrder: 0 },
-    { title: '问题分析', description: '分析问题原因和解决方案', status: 'todo', priority: 'high', labels: ['分析'], sortOrder: 1 },
-    { title: '方案实施', description: '实施解决方案', status: 'todo', priority: 'medium', labels: ['实施'], sortOrder: 2 },
-    { title: '客户反馈', description: '收集客户反馈和确认', status: 'todo', priority: 'medium', labels: ['反馈'], sortOrder: 3 },
-    { title: '问题关闭', description: '问题解决并关闭', status: 'todo', priority: 'low', labels: ['关闭'], sortOrder: 4 },
-  ]
-  supportTasks.forEach(task => {
-    db.prepare(`INSERT INTO template_tasks (id, template_id, title, description, status, priority, labels, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), supportTemplateId, task.title, task.description, task.status, task.priority, JSON.stringify(task.labels), task.sortOrder, now
-    )
-  })
-  const supportColumns = [
-    { statusKey: 'todo', label: '待处理', color: '#94A3B8', sortOrder: 0 },
-    { statusKey: 'in_progress', label: '处理中', color: '#F59E0B', sortOrder: 1 },
-    { statusKey: 'review', label: '待确认', color: '#0EA5E9', sortOrder: 2 },
-    { statusKey: 'done', label: '已关闭', color: '#10B981', sortOrder: 3 },
-  ]
-  supportColumns.forEach(col => {
-    db.prepare(`INSERT INTO template_kanban_columns (id, template_id, status_key, label, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), supportTemplateId, col.statusKey, col.label, col.color, col.sortOrder, now
-    )
-  })
-
-  console.log('[db] 已初始化系统预设模板')
+  console.log('[db] 系统预设模板已就绪')
 }
 
-// 咨询服务模板（v1.8.8）：按名称幂等——存量库已有系统模板时 count 守卫会跳过 initSystemTemplates，这里单独补插
-function initConsultingTemplate() {
-  const exists = db.prepare('SELECT COUNT(*) as c FROM project_templates WHERE is_system = 1 AND name = ?').get('咨询服务模板') as { c: number }
-  if (exists.c > 0) return
 
-  const now = new Date().toISOString()
-  const id = () => crypto.randomUUID()
-
-  const consultingTemplateId = id()
-  db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
-    consultingTemplateId, '咨询服务模板', '适用于咨询服务类项目的标准流程模板', '咨询项目', now
-  )
-  const consultingTasks = [
-    { title: '需求调研与诊断', description: '访谈调研，梳理业务现状与痛点', status: 'todo', priority: 'high', labels: ['调研'], sortOrder: 0 },
-    { title: '方案框架设计', description: '设计咨询方案框架与交付物清单', status: 'todo', priority: 'high', labels: ['设计'], sortOrder: 1 },
-    { title: '方案评审与确认', description: '与客户评审方案并确认调整', status: 'todo', priority: 'high', labels: ['评审'], sortOrder: 2 },
-    { title: '咨询交付实施', description: '输出报告与方案，辅导落地', status: 'todo', priority: 'medium', labels: ['交付'], sortOrder: 3 },
-    { title: '成果汇报验收', description: '成果汇报与客户验收', status: 'todo', priority: 'medium', labels: ['验收'], sortOrder: 4 },
-    { title: '复盘与知识沉淀', description: '项目复盘，沉淀方法论与经验', status: 'todo', priority: 'low', labels: ['复盘'], sortOrder: 5 },
-  ]
-  consultingTasks.forEach(task => {
-    db.prepare(`INSERT INTO template_tasks (id, template_id, title, description, status, priority, labels, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), consultingTemplateId, task.title, task.description, task.status, task.priority, JSON.stringify(task.labels), task.sortOrder, now
-    )
-  })
-  const consultingBudgets = [
-    { category: 'labor', description: '人力成本' },
-    { category: 'outsource', description: '外部专家' },
-  ]
-  consultingBudgets.forEach(budget => {
-    db.prepare(`INSERT INTO template_budgets (id, template_id, category, description, created_at) VALUES (?, ?, ?, ?, ?)`).run(
-      id(), consultingTemplateId, budget.category, budget.description, now
-    )
-  })
-  const consultingColumns = [
-    { statusKey: 'todo', label: '待办', color: '#94A3B8', sortOrder: 0 },
-    { statusKey: 'in_progress', label: '进行中', color: '#F59E0B', sortOrder: 1 },
-    { statusKey: 'review', label: '评审中', color: '#0EA5E9', sortOrder: 2 },
-    { statusKey: 'done', label: '已完成', color: '#10B981', sortOrder: 3 },
-  ]
-  consultingColumns.forEach(col => {
-    db.prepare(`INSERT INTO template_kanban_columns (id, template_id, status_key, label, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), consultingTemplateId, col.statusKey, col.label, col.color, col.sortOrder, now
-    )
-  })
-
-  console.log('[db] 已补插系统模板: 咨询服务模板')
-}
-
-// 实施交付模板（v1.8.9）：按名称幂等——存量库已有系统模板时 count 守卫会跳过 initSystemTemplates，这里单独补插
-function initImplementationTemplate() {
-  const exists = db.prepare('SELECT COUNT(*) as c FROM project_templates WHERE is_system = 1 AND name = ?').get('实施交付模板') as { c: number }
-  if (exists.c > 0) return
-
-  const now = new Date().toISOString()
-  const id = () => crypto.randomUUID()
-
-  const implTemplateId = id()
-  db.prepare('INSERT INTO project_templates (id, name, description, category, is_system, created_at) VALUES (?, ?, ?, ?, 1, ?)').run(
-    implTemplateId, '实施交付模板', '适用于项目实施交付的标准流程模板', '实施项目', now
-  )
-  const implTasks = [
-    { title: '进场准备', description: '组建实施团队，确认进场计划与物料清单', status: 'todo', priority: 'high', labels: ['准备'], sortOrder: 0 },
-    { title: '环境部署', description: '搭建生产/测试环境，完成系统安装配置', status: 'todo', priority: 'high', labels: ['部署'], sortOrder: 1 },
-    { title: '数据迁移', description: '历史数据清洗、导入与核对', status: 'todo', priority: 'high', labels: ['数据'], sortOrder: 2 },
-    { title: '用户培训', description: '培训管理员与最终用户，输出操作手册', status: 'todo', priority: 'medium', labels: ['培训'], sortOrder: 3 },
-    { title: '试运行', description: '试运行期伴随保障，问题收集与处理', status: 'todo', priority: 'medium', labels: ['试运行'], sortOrder: 4 },
-    { title: '上线切换', description: '正式切换上线，制定回滚预案', status: 'todo', priority: 'high', labels: ['上线'], sortOrder: 5 },
-    { title: '验收移交', description: '验收签字，文档移交与结项', status: 'todo', priority: 'medium', labels: ['验收'], sortOrder: 6 },
-  ]
-  implTasks.forEach(task => {
-    db.prepare(`INSERT INTO template_tasks (id, template_id, title, description, status, priority, labels, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), implTemplateId, task.title, task.description, task.status, task.priority, JSON.stringify(task.labels), task.sortOrder, now
-    )
-  })
-  const implBudgets = [
-    { category: 'labor', description: '人力成本' },
-    { category: 'hardware', description: '硬件设备' },
-  ]
-  implBudgets.forEach(budget => {
-    db.prepare(`INSERT INTO template_budgets (id, template_id, category, description, created_at) VALUES (?, ?, ?, ?, ?)`).run(
-      id(), implTemplateId, budget.category, budget.description, now
-    )
-  })
-  const implColumns = [
-    { statusKey: 'todo', label: '待办', color: '#94A3B8', sortOrder: 0 },
-    { statusKey: 'in_progress', label: '进行中', color: '#F59E0B', sortOrder: 1 },
-    { statusKey: 'review', label: '待验收', color: '#0EA5E9', sortOrder: 2 },
-    { statusKey: 'done', label: '已完成', color: '#10B981', sortOrder: 3 },
-  ]
-  implColumns.forEach(col => {
-    db.prepare(`INSERT INTO template_kanban_columns (id, template_id, status_key, label, color, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), implTemplateId, col.statusKey, col.label, col.color, col.sortOrder, now
-    )
-  })
-
-  console.log('[db] 已补插系统模板: 实施交付模板')
-}
 
 try {
   initSystemTemplates()
 } catch (e) {
   console.error('[initSystemTemplates] error:', e)
-}
-
-try {
-  initConsultingTemplate()
-} catch (e) {
-  console.error('[initConsultingTemplate] error:', e)
-}
-
-try {
-  initImplementationTemplate()
-} catch (e) {
-  console.error('[initImplementationTemplate] error:', e)
 }
 
 // 补齐存量库系统模板的分类（v1.8.6：系统模板在历史库中已存在，seed 守卫会跳过重插，这里按名称回填分类）
