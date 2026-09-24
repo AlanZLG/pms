@@ -26,11 +26,10 @@ router.get('/search', (req: AuthRequest, res: Response, next: NextFunction) => {
       return res.json({ tasks: [], projects: [], keyword: '' })
     }
 
-    // 根据用户角色获取可见的项目ID列表
+    // 根据用户角色获取可见的项目ID列表（内部成员全局可搜，仅 guest 限制在参与项目）
     const user = userRepo.findById(req.userId!)
     let projectIds: string[] | null = null
-    if (user?.role !== 'admin' && user?.role !== 'finance') {
-      // 非管理员只能搜索参与项目的任务
+    if (user?.role === 'guest') {
       const projects = projectRepo.findByMember(req.userId!)
       projectIds = projects.map(p => p.id)
     }

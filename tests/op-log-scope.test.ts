@@ -17,8 +17,8 @@ function addMember(projectId: string, userId: string) {
     .run(genId(), projectId, userId, 'editor')
 }
 
-describe('台账数据作用域（非管理者只见创建/参与项目的台账）', () => {
-  let adminId: string, memberId: string, outsiderId: string
+describe('台账数据作用域（v1.9.2：内部成员全局可见，仅 guest 受限）', () => {
+  let adminId: string, memberId: string, outsiderId: string, guestId: string
   let pMember: string   // member 参与的项目
   let pOther: string    // 与 member/outsider 无关的项目
   let logMember: string, logOther: string, logNoProject: string
@@ -32,6 +32,7 @@ describe('台账数据作用域（非管理者只见创建/参与项目的台账
     adminId = seedUser(db, { email: 'olog-admin@pm.dev', name: '管理员', role: 'admin' })
     memberId = seedUser(db, { email: 'olog-member@pm.dev', name: '成员', role: 'member' })
     outsiderId = seedUser(db, { email: 'olog-out@pm.dev', name: '路人', role: 'member' })
+    guestId = seedUser(db, { email: 'olog-guest@pm.dev', name: '访客', role: 'guest' })
 
     pMember = seedProject(db, adminId, { name: '成员项目' })
     pOther = seedProject(db, adminId, { name: '无关项目' })
@@ -98,20 +99,17 @@ describe('台账数据作用域（非管理者只见创建/参与项目的台账
   })
 
   describe('与 scopedProjectIds 的组合（模拟路由行为）', () => {
-    it('成员：列表只见参与项目的台账，看不到无关项目与无项目归属台账', () => {
+    it('内部成员（member）：不限制，可见全部台账（含无项目归属）', () => {
       const scope = scopedProjectIds(userRepo.findById(memberId))
-      const ids = opLogRepo.find({ projectIds: scopeToProjectIds(scope) }).map((l) => l.id)
-      expect(ids).toEqual([logMember])
+      expect(scope).toBeUndefined()
+      expect(opLogRepo.find({ projectIds: scopeToProjectIds(scope) }).length).toBe(3)
     })
 
-    it('成员：显式查询无关项目 → 空集（防越权枚举）', () => {
+    it('内部成员：显式查询任意项目 → 限定该项目', () => {
       const scope = scopedProjectIds(userRepo.findById(memberId))
-      expect(opLogRepo.find({ projectIds: scopeToProjectIds(scope, pOther) })).toEqual([])
-    })
-
-    it('成员：显式查询无项目归属（none）→ 空集', () => {
-      const scope = scopedProjectIds(userRepo.findById(memberId))
-      expect(opLogRepo.find({ projectId: 'none', projectIds: scopeToProjectIds(scope, 'none') })).toEqual([])
+      // 与路由一致：显式项目筛选由独立 projectId 参数承载
+      const ids = opLogRepo.find({ projectId: pOther, projectIds: scopeToProjectIds(scope, pOther) }).map((l) => l.id)
+      expect(ids).toEqual([logOther])
     })
 
     it('admin：不限制，含无项目归属台账', () => {
@@ -119,10 +117,29 @@ describe('台账数据作用域（非管理者只见创建/参与项目的台账
       expect(opLogRepo.find({ projectIds: scopeToProjectIds(scope) }).length).toBe(3)
     })
 
-    it('无任何项目的用户：列表为空而不是全量', () => {
+    it('无任何项目的内部成员：列表为全量而不是空', () => {
       const scope = scopedProjectIds(userRepo.findById(outsiderId))
+      expect(scope).toBeUndefined()
+      expect(opLogRepo.find({ projectIds: scopeToProjectIds(scope) }).length).toBe(3)
+    })
+
+    it('guest（未参与项目）：列表为空而不是全量', () => {
+      const scope = scopedProjectIds(userRepo.findById(guestId))
       expect(scope).toEqual([])
       expect(opLogRepo.find({ projectIds: scopeToProjectIds(scope) })).toEqual([])
+    })
+
+    it('guest（参与项目）：只见参与项目的台账', () => {
+      addMember(pMember, guestId)
+      const scope = scopedProjectIds(userRepo.findById(guestId))
+      const ids = opLogRepo.find({ projectIds: scopeToProjectIds(scope) }).map((l) => l.id)
+      expect(ids).toEqual([logMember])
+    })
+
+    it('guest：显式查询未参与的项目 → 空集（防越权枚举）', () => {
+      addMember(pMember, guestId)
+      const scope = scopedProjectIds(userRepo.findById(guestId))
+      expect(opLogRepo.find({ projectIds: scopeToProjectIds(scope, pOther) })).toEqual([])
     })
   })
 })

@@ -21,8 +21,8 @@ function user(id: string): User {
   return userRepo.findById(id)!
 }
 
-describe('统计接口权限隔离', () => {
-  let adminId: string, memberId: string, outsiderId: string
+describe('统计接口权限隔离（v1.9.2：内部成员全局可见概览，仅 guest 受限）', () => {
+  let adminId: string, memberId: string, outsiderId: string, guestId: string
   let pAdmin: string   // admin 的项目，2 个 todo
   let pMember: string  // member 参与的项目，1 个 done
   let pOther: string   // 与成员/路人无关的项目
@@ -36,6 +36,7 @@ describe('统计接口权限隔离', () => {
     adminId = seedUser(db, { email: 'scope-admin@pm.dev', name: '管理员', role: 'admin' })
     memberId = seedUser(db, { email: 'scope-member@pm.dev', name: '成员', role: 'member' })
     outsiderId = seedUser(db, { email: 'scope-out@pm.dev', name: '路人', role: 'member' })
+    guestId = seedUser(db, { email: 'scope-guest@pm.dev', name: '访客', role: 'guest' })
 
     pAdmin = seedProject(db, adminId, { name: '管理员项目' })
     pMember = seedProject(db, adminId, { name: '成员项目' })
@@ -49,26 +50,35 @@ describe('统计接口权限隔离', () => {
   })
 
   describe('scopedProjectIds', () => {
-    it('admin 不限制（undefined）', () => {
+    it('内部成员（admin/member/无项目成员）都不限制（undefined）', () => {
       expect(scopedProjectIds(user(adminId))).toBeUndefined()
+      expect(scopedProjectIds(user(memberId))).toBeUndefined()
+      expect(scopedProjectIds(user(outsiderId))).toBeUndefined()
     })
 
-    it('成员只能看到自己参与的项目', () => {
-      expect(scopedProjectIds(user(memberId))).toEqual([pMember])
+    it('guest：可见自己参与的项目', () => {
+      addMember(pMember, guestId)
+      expect(scopedProjectIds(user(guestId))).toEqual([pMember])
     })
 
-    it('无任何项目的用户得到空数组（而不是全量）', () => {
-      expect(scopedProjectIds(user(outsiderId))).toEqual([])
+    it('guest：无任何项目得到空数组（而不是全量）', () => {
+      expect(scopedProjectIds(user(guestId))).toEqual([])
     })
   })
 
   describe('resolveScope 越权防护', () => {
-    it('成员请求自己参与的项目 → 只统计该项目', () => {
+    it('内部成员请求任意项目 → 限定该项目（概览全局可见）', () => {
       expect(resolveScope(user(memberId), pMember)).toEqual([pMember])
+      expect(resolveScope(user(memberId), pAdmin)).toEqual([pAdmin])
     })
 
-    it('成员请求未参与的项目 → 空数组（越权拦截）', () => {
-      expect(resolveScope(user(memberId), pAdmin)).toEqual([])
+    it('guest 请求参与的项目 → 该项目', () => {
+      addMember(pMember, guestId)
+      expect(resolveScope(user(guestId), pMember)).toEqual([pMember])
+    })
+
+    it('guest 请求未参与的项目 → 空数组（越权拦截）', () => {
+      expect(resolveScope(user(guestId), pAdmin)).toEqual([])
     })
 
     it('admin 请求任意项目 → 该项目', () => {

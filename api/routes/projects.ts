@@ -67,7 +67,8 @@ router.get('/', (req: AuthRequest, res: Response, next: NextFunction) => {
       }
     })
     list = projectRepo.findAll()
-    if (user.role !== 'admin') {
+    if (user.role === 'guest') {
+      // 访客仅可见自己参与的项目；内部成员全局可见项目概览（详情仍需权限）
       list = list.filter((p) => p.members.some((m) => m.userId === user.id) || p.ownerId === user.id)
     }
     res.json({ projects: list })

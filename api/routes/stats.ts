@@ -8,11 +8,11 @@ import type { User, WorkloadItem } from '../../shared/types.ts'
 const router = Router()
 router.use(authRequired)
 
-// 权限作用域：非管理员只能看到自己创建/参与的项目
-// 返回 undefined = 不限制（仅 admin）；[] = 无可见项目（统计为 0）；数组 = 可见项目 id 集合
+// 权限作用域（v1.9.2）：仅访客(guest)限制在自己参与的项目；内部成员全局可见概览
+// 返回 undefined = 不限制（内部成员）；[] = 无可见项目（统计为 0）；数组 = 可见项目 id 集合
 export function scopedProjectIds(user: User | undefined): string[] | undefined {
   if (!user) return []
-  if (user.role === 'admin') return undefined
+  if (user.role !== 'guest') return undefined
   const projects = projectRepo.findAll().filter(
     (p) => p.ownerId === user.id || p.members.some((m) => m.userId === user.id),
   )

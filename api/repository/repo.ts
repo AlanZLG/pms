@@ -351,6 +351,8 @@ export const taskRepo = {
     return tx()
   },
   search(keyword: string, projectIds: string[] | null): Task[] {
+    // projectIds 为非 null 空数组 = 无可见项目（如未参与任何项目的访客）→ 直接返回空
+    if (projectIds && projectIds.length === 0) return []
     const likeKeyword = `%${keyword}%`
     let sql = `
       SELECT * FROM tasks 
