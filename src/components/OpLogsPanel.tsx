@@ -317,6 +317,25 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
     currentUser?.role === 'owner' ||
     !!currentUser?.customRole?.permissions?.some((p) => p.key === 'oplog.edit')
 
+  // 台账写入权限（v1.9.3，与后端守卫同口径）：登记/编辑须为项目负责人或项目成员；删除仅项目负责人；admin 全权
+  const projectWritable = useCallback((pid: string | null | undefined) => {
+    if (!pid || !currentUser) return false
+    if (currentUser.role === 'admin') return true
+    const p = projects.find((x) => x.id === pid)
+    return !!p && (p.ownerId === currentUser.id || p.members.some((m) => m.userId === currentUser.id))
+  }, [currentUser, projects])
+  const projectOwned = useCallback((pid: string | null | undefined) => {
+    if (!currentUser) return false
+    if (currentUser.role === 'admin') return true
+    if (!pid) return false
+    const p = projects.find((x) => x.id === pid)
+    return !!p && p.ownerId === currentUser.id
+  }, [currentUser, projects])
+  // 当前上下文项目（嵌入模式固定 / 全局模式取所选 Tab；'all' 视图在弹窗内选项目）
+  const contextWritable = projectId
+    ? projectWritable(projectId)
+    : projectFilter !== 'all' ? projectWritable(projectFilter) : true
+
   // AI 相似案例点击：拉取完整台账并打开，强制只读查看（不允许从 AI 案例入口修改任何字段）
   const handleOpenCaseLog = async (id: string) => {
     try {
@@ -558,9 +577,13 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={importing || !importProjectId}
+            disabled={importing || !importProjectId || !contextWritable}
             onClick={() => fileRef.current?.click()}
-            title={!importProjectId ? '请先选择具体项目，再导入该项目的台账' : '从 Excel 文件导入台账'}
+            title={!importProjectId
+              ? '请先选择具体项目，再导入该项目的台账'
+              : !contextWritable
+                ? '只有该项目的负责人或成员才能导入台账'
+                : '从 Excel 文件导入台账'}
           >
             <Upload className="h-3.5 w-3.5" /> {importing ? '导入中…' : '导入'}
           </Button>
@@ -572,7 +595,12 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
               <Bot className="h-3.5 w-3.5" /> AI 助手
             </Button>
           )}
-          <Button size="sm" onClick={openCreate}>
+          <Button
+            size="sm"
+            onClick={openCreate}
+            disabled={!contextWritable}
+            title={!contextWritable ? '只有该项目的负责人或成员才能登记台账' : undefined}
+          >
             <Plus className="h-4 w-4" /> 新增记录
           </Button>
         </div>
@@ -872,13 +900,16 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
                       >
                         <Edit2 className="h-3.5 w-3.5" />
                       </button>
-                      <button
-                        onClick={() => handleDelete(log)}
-                        className="rounded-md p-1.5 text-muted transition hover:bg-danger/15 hover:text-danger"
-                        title="删除"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
+                      {/* 删除仅项目负责人（admin 例外，v1.9.3）；无权限直接隐藏 */}
+                      {projectOwned(log.projectId) && (
+                        <button
+                          onClick={() => handleDelete(log)}
+                          className="rounded-md p-1.5 text-muted transition hover:bg-danger/15 hover:text-danger"
+                          title="删除"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -899,8 +930,9 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
             setExtraRows={setExtraRows}
             extraKeySuggestions={[...new Set(logs.flatMap((l) => Object.keys(l.extraFields || {})))]}
             projects={projects}
+            projectWritable={projectWritable}
             lockProject={lockProject}
-            readonly={caseViewMode || (!canEditOpLog && !!editing)}
+            readonly={caseViewMode || (!!editing && (!canEditOpLog || !projectWritable(editing.projectId)))}
             onOpenCase={handleOpenCaseLog}
             lockedProjectLabel={
               isEmbedded ? undefined : projects.find((p) => p.id === projectFilter)?.name
@@ -1028,6 +1060,7 @@ function OpLogDialog({
   setExtraRows,
   extraKeySuggestions,
   projects,
+  projectWritable,
   lockProject,
   readonly,
   onOpenCase,
@@ -1044,6 +1077,8 @@ function OpLogDialog({
   setExtraRows: React.Dispatch<React.SetStateAction<ExtraRow[]>>
   extraKeySuggestions: string[]
   projects: Project[]
+  /** 项目可登记判断（v1.9.3：负责人或成员，admin 全权；与父组件/后端同口径） */
+  projectWritable: (pid: string | null | undefined) => boolean
   /** 为 true 时项目归属不可更改（嵌入模式或已选中项目 Tab，保证按项目隔离） */
   lockProject: boolean
   /** 只读查看模式（无台账编辑权限打开已有记录） */
@@ -1157,9 +1192,9 @@ function OpLogDialog({
             {lockProject ? (
               <Input value={lockedProjectLabel || projects.find((p) => p.id === form.projectId)?.name || '当前项目'} disabled />
             ) : (
-              // 台账必须关联项目：下拉仅列可选项目，无「不关联」选项
+              // 台账必须关联项目：下拉仅列当前用户可登记的项目（负责人或成员，v1.9.3），无「不关联」选项
               <select className={inputCls + ' w-full'} value={form.projectId} onChange={(e) => set({ projectId: e.target.value })}>
-                {projects.map((p) => (
+                {projects.filter((p) => projectWritable(p.id)).map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select>

@@ -8,6 +8,7 @@ import { llm } from '../lib/llm.ts'
 import { buildAnalyzeMessages, buildChatMessages, type ChatTurn } from '../lib/prompts.ts'
 import { recallCases, toAiCase } from '../lib/recallCases.ts'
 import { scopedProjectIds } from './stats.ts'
+import type { User } from '../../shared/types.ts'
 
 export const router = Router()
 router.use(authRequired)
@@ -148,6 +149,34 @@ export function scopeToProjectIds(scope: string[] | undefined, projectId?: strin
   return scope
 }
 
+// ===== 写入权限（v1.9.3）：登记/修改/导入须为该项目的负责人或成员；删除仅项目负责人；admin 全权例外 =====
+// guest 无写入资格；无项目归属的历史遗留台账仅 admin 可操作
+function findProjectOr404(projectId: string | null | undefined) {
+  if (!projectId) throw new ApiError(403, '无项目归属的历史台账仅管理员可操作')
+  const p = projectRepo.findById(String(projectId))
+  if (!p) throw new ApiError(404, '关联项目不存在')
+  return p
+}
+
+/** 登记/修改/导入守卫：admin 放行；guest 拒绝；其余须为项目负责人或项目成员 */
+export function assertOpLogRegisterAccess(user: User | undefined, projectId: string | null | undefined): void {
+  if (!user) throw new ApiError(401, '未登录')
+  if (user.role === 'admin') return
+  if (user.role === 'guest') throw new ApiError(403, '访客无权登记台账')
+  const p = findProjectOr404(projectId)
+  if (p.ownerId === user.id) return
+  if (projectRepo.members(p.id).some((m) => m.userId === user.id)) return
+  throw new ApiError(403, '只有该项目的负责人或成员才能登记台账')
+}
+
+/** 删除守卫：admin 放行；其余仅项目负责人 */
+export function assertOpLogDeleteAccess(user: User | undefined, projectId: string | null | undefined): void {
+  if (!user) throw new ApiError(401, '未登录')
+  if (user.role === 'admin') return
+  const p = findProjectOr404(projectId)
+  if (p.ownerId !== user.id) throw new ApiError(403, '只有项目负责人才能删除台账')
+}
+
 // ===== 列表 =====
 router.get('/op-logs', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -213,11 +242,8 @@ router.post('/op-logs', (req: AuthRequest, res: Response, next: NextFunction) =>
     if (missing.length > 0) throw new ApiError(400, `状态为已完成时必须填写：${missing.join('、')}`)
     // 台账必须关联项目：所有运维作业（含内部作业）统一归集到项目名下，admin 也不例外
     if (!b.projectId) throw new ApiError(400, '台账必须关联项目，请选择所属项目')
-    // 写入越权：非管理者只能在自己可见的项目下登记
-    const scope = scopeOf(req)
-    if (scope !== undefined && !scope.includes(String(b.projectId))) throw new ApiError(403, '无权在该项目下登记台账')
-    const p = projectRepo.findById(String(b.projectId))
-    if (!p) throw new ApiError(404, '关联项目不存在')
+    // 写入权限（v1.9.3）：仅该项目的负责人或成员可登记（admin 例外）
+    assertOpLogRegisterAccess(userRepo.findById(req.userId!), String(b.projectId))
     const log = opLogRepo.create(req.userId!, {
       projectId: String(b.projectId),
       category: b.category,
@@ -245,15 +271,17 @@ router.patch('/op-logs/:id', (req: AuthRequest, res: Response, next: NextFunctio
     const b = req.body || {}
     if (b.status && !VALID_STATUS.includes(b.status)) throw new ApiError(400, '无效的状态')
     if (b.problem !== undefined && !String(b.problem).trim()) throw new ApiError(400, '问题描述必填')
-    // 修改越权：不可见项目的台账视同不存在；不允许把台账移动到无权限的项目
+    // 修改越权：不可见项目的台账视同不存在；修改/移动按登记权限校验（v1.9.3）
     const scope = scopeOf(req)
     const cur = opLogRepo.findById(String(req.params.id))
     if (!cur) throw new ApiError(404, '台账记录不存在')
     if (scope !== undefined) {
       if (!cur.projectId || !scope.includes(String(cur.projectId))) throw new ApiError(404, '台账记录不存在')
-      if (b.projectId !== undefined && b.projectId !== cur.projectId) {
-        if (!b.projectId || !scope.includes(String(b.projectId))) throw new ApiError(403, '无权将台账移动到该项目')
-      }
+    }
+    assertOpLogRegisterAccess(userRepo.findById(req.userId!), cur.projectId)
+    if (b.projectId !== undefined && b.projectId !== cur.projectId) {
+      if (!b.projectId) throw new ApiError(400, '台账必须关联项目，请选择所属项目')
+      assertOpLogRegisterAccess(userRepo.findById(req.userId!), String(b.projectId))
     }
     // 已完成状态必须填写经验三字段（合并现有值与本次更新后校验，防止清空已完成记录的经验字段）
     const merged = { ...cur, ...b } as Record<string, unknown>
@@ -268,12 +296,14 @@ router.patch('/op-logs/:id', (req: AuthRequest, res: Response, next: NextFunctio
 // ===== 删除（软删除）=====
 router.delete('/op-logs/:id', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    // 删除越权：不可见项目的台账视同不存在
+    // 删除越权：guest 不可见项目的台账视同不存在；删除仅项目负责人（admin 例外，v1.9.3）
+    const cur = opLogRepo.findById(String(req.params.id))
+    if (!cur) throw new ApiError(404, '台账记录不存在')
     const scope = scopeOf(req)
-    if (scope !== undefined) {
-      const cur = opLogRepo.findById(String(req.params.id))
-      if (!cur || !cur.projectId || !scope.includes(String(cur.projectId))) throw new ApiError(404, '台账记录不存在')
+    if (scope !== undefined && (!cur.projectId || !scope.includes(String(cur.projectId)))) {
+      throw new ApiError(404, '台账记录不存在')
     }
+    assertOpLogDeleteAccess(userRepo.findById(req.userId!), cur.projectId)
     const ok = opLogRepo.softDelete(req.params.id)
     if (!ok) throw new ApiError(404, '台账记录不存在')
     res.json({ ok: true })
@@ -317,11 +347,8 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
     // 台账必须关联项目：导入必须指定目标项目（前端全局模式下需先点选项目 Tab）
     const projectId = (req.body.projectId as string) || (req.query.projectId as string)
     if (!projectId) throw new ApiError(400, '导入台账必须关联项目，请先选择目标项目')
-    // 导入越权：非管理者只能导入到自己可见的项目
-    const scope = scopeOf(req)
-    if (scope !== undefined && !scope.includes(projectId)) throw new ApiError(403, '无权在该项目下导入台账')
-    const p = projectRepo.findById(projectId)
-    if (!p) throw new ApiError(404, '关联项目不存在')
+    // 导入权限（v1.9.3）：仅该项目的负责人或成员可导入（admin 例外）
+    assertOpLogRegisterAccess(userRepo.findById(req.userId!), projectId)
 
     const workbook = new ExcelJS.Workbook()
     await workbook.xlsx.load(file.buffer)
