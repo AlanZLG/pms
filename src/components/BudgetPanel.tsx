@@ -337,8 +337,8 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
       </div>
 
       {showBudgetModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl max-h-[85vh] overflow-y-auto max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg text-text-primary">{editingBudget ? '编辑预算' : '添加预算'}</h3>
               <button onClick={() => setShowBudgetModal(false)} className="p-1 text-muted hover:text-text-primary">
@@ -392,8 +392,8 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
       )}
 
       {showExpenseModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl max-h-[85vh] overflow-y-auto max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg text-text-primary">{editingExpense ? '编辑支出' : '添加支出'}</h3>
               <button onClick={() => setShowExpenseModal(false)} className="p-1 text-muted hover:text-text-primary">
@@ -465,8 +465,8 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
       )}
 
       {showApproveModal && approvingBudget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl max-h-[85vh] overflow-y-auto max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
               <h3 className="font-display text-lg text-text-primary">
                 {approveAction === 'approve' ? '审批预算' : '拒绝预算'}

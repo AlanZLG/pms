@@ -114,7 +114,7 @@ export default function ProjectDialog({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="glass relative w-full max-w-md rounded-2xl p-6 animate-pop-in">
+      <div className="glass relative max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl p-6 animate-pop-in">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="font-display text-xl text-text-primary">{title}</h2>
           <button onClick={onClose} className="text-muted hover:text-text-secondary">
@@ -326,7 +326,7 @@ export function Modal({
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className={cn('glass relative w-full rounded-2xl p-6 animate-pop-in', wide ? 'max-w-2xl' : 'max-w-md')}>
+      <div className={cn('glass relative max-h-[85vh] w-full overflow-y-auto rounded-2xl p-6 animate-pop-in', wide ? 'max-w-2xl' : 'max-w-md')}>
         {title && (
           <div className="mb-4 flex items-center justify-between">
             <div className="font-display text-xl text-text-primary">{title}</div>

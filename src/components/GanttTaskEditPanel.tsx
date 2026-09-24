@@ -58,9 +58,9 @@ export default function GanttTaskEditPanel({ task, onClose, onSave, onOpenDetail
   const dateInputCls = 'w-full bg-bg-soft border border-bg-border rounded px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:border-brand transition-colors'
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4" onMouseDown={onClose}>
       <div
-        className="w-[350px] max-w-[92vw] bg-bg-panel border border-bg-border rounded-xl shadow-2xl"
+        className="max-h-[85vh] w-[350px] max-w-[92vw] overflow-y-auto bg-bg-panel border border-bg-border rounded-xl shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* 标题 */}

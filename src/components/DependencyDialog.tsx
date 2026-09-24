@@ -84,7 +84,7 @@ export default function DependencyDialog({
       />
 
       {/* 对话框 */}
-      <div className="relative w-full max-w-md bg-bg-panel border border-bg-border rounded-2xl shadow-2xl">
+      <div className="relative max-h-[85vh] w-full max-w-md overflow-y-auto bg-bg-panel border border-bg-border rounded-2xl shadow-2xl">
         {/* 标题栏 */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-bg-border">
           <div className="flex items-center gap-2">

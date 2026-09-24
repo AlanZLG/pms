@@ -163,7 +163,7 @@ export default function KanbanColumnDialog({ projectId, open, onClose, onChanged
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-lg rounded-xl bg-bg-panel p-6 shadow-lg">
+      <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-xl bg-bg-panel p-6 shadow-lg">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="text-lg font-medium text-text-primary">看板列配置</h3>
           <button onClick={onClose} className="text-muted hover:text-text-primary">

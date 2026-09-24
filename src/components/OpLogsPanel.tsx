@@ -1139,7 +1139,7 @@ function OpLogDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 py-10">
-      <div className="w-full max-w-3xl rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl animate-fade-up">
+      <div className="w-full max-w-3xl rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl animate-fade-up max-h-[85vh] overflow-y-auto">
         <div className="mb-5 flex items-center justify-between">
           <h3 className="text-lg font-medium text-text-primary">
             {readonly ? '台账详情' : editing ? '编辑台账记录' : '新增台账记录'}

@@ -111,7 +111,7 @@ export default function RoleDialog({ role, onClose }: RoleDialogProps) {
   }, [name, description, role, selectedPermissions, notify, onClose])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={onClose}>
       <div
         className="bg-bg-panel border border-bg-border rounded-2xl w-full max-w-4xl max-h-[90vh] shadow-xl flex flex-col"
         onClick={e => e.stopPropagation()}

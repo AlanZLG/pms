@@ -109,7 +109,7 @@ export default function GlobalSearch() {
 
       {/* 搜索对话框 */}
       {open && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center pt-[15vh]">
+        <div className="fixed inset-0 z-50 flex items-start justify-center px-4 pt-[15vh] pb-4">
           {/* 背景遮罩 */}
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"

@@ -208,7 +208,7 @@ export default function TrashPage() {
 
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-md p-6">
+          <Card className="max-h-[85vh] w-full max-w-md overflow-y-auto p-6">
             <div className="flex items-start gap-4">
               <div className="grid h-12 w-12 place-items-center rounded-full bg-danger/20">
                 <AlertTriangle className="h-6 w-6 text-danger" />

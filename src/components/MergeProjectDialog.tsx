@@ -44,7 +44,7 @@ export function MergeProjectDialog({ open, onClose, sourceProject, onSuccess }: 
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <div className="max-h-[85vh] w-full max-w-md overflow-y-auto rounded-2xl border border-bg-border bg-bg-panel p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="flex items-center gap-2 font-display text-base font-semibold text-text-primary">
             <GitMerge className="h-4.5 w-4.5 text-brand" /> 合并到运维项目
