@@ -734,6 +734,31 @@ export const activityLogRepo = {
   },
 }
 
+/** 全局系统操作日志（人员类别等全局资源的变更留痕与查询） */
+export const systemActivityLogRepo = {
+  create(userId: string, action: string, target?: string, detail?: string): void {
+    db.prepare('INSERT INTO system_activity_log (id, user_id, action, target, detail, created_at) VALUES (?,?,?,?,?,?)')
+      .run(genId(), userId, action, target || null, detail || null, new Date().toISOString())
+  },
+  findAll(limit = 100): Array<{ id: string; action: string; target: string | null; detail: string | null; userName: string; createdAt: string }> {
+    const rows = db.prepare(`
+      SELECT l.id, l.action, l.target, l.detail, l.created_at, u.name as user_name
+      FROM system_activity_log l
+      JOIN users u ON l.user_id = u.id
+      ORDER BY l.created_at DESC
+      LIMIT ?
+    `).all(limit) as SqlRow[]
+    return rows.map((r) => ({
+      id: r.id as string,
+      action: r.action as string,
+      target: (r.target as string | null) ?? null,
+      detail: (r.detail as string | null) ?? null,
+      userName: r.user_name as string,
+      createdAt: r.created_at as string,
+    }))
+  },
+}
+
 // ===== Subtasks =====
 export const subtaskRepo = {
   findByTask(taskId: string): Subtask[] {
@@ -1176,6 +1201,33 @@ export const expenseRepo = {
 }
 
 // ===== Task Hours =====
+// 默认时薪（RMB/h）：项目负责人 200 / 成员 150 / 外包 125
+// 生效优先级：个人时薪 > 人员类别时薪 > 项目角色默认价 > 0（与 db.ts 回填、hours.ts 展示口径一致）
+export const DEFAULT_RATE_OWNER = 200
+export const DEFAULT_RATE_MEMBER = 150
+export const DEFAULT_RATE_OUTSOURCED = 125
+
+export type HourlyRateSource = 'user' | 'category' | 'role_owner' | 'role_member' | 'role_outsourced'
+
+// 解析某人在某任务上登记工时时的生效单价（登记时冻结为快照）
+export function resolveHourlyRate(userId: string, taskId: string): { rate: number; source: HourlyRateSource } {
+  const row = db.prepare(`
+    SELECT u.hourly_rate as u_rate, u.is_outsourced as u_out,
+           uc.hourly_rate as c_rate, uc.is_outsourced as c_out,
+           pm.role as pm_role
+    FROM users u
+    LEFT JOIN user_categories uc ON u.category_id = uc.id
+    LEFT JOIN tasks t ON t.id = ?
+    LEFT JOIN project_members pm ON pm.project_id = t.project_id AND pm.user_id = u.id
+    WHERE u.id = ?
+  `).get(taskId, userId) as SqlRow
+  if (row.u_rate != null) return { rate: Number(row.u_rate), source: 'user' }
+  if (row.c_rate != null) return { rate: Number(row.c_rate), source: 'category' }
+  if (row.pm_role === 'owner') return { rate: DEFAULT_RATE_OWNER, source: 'role_owner' }
+  if (Number(row.u_out ?? row.c_out ?? 0) === 1) return { rate: DEFAULT_RATE_OUTSOURCED, source: 'role_outsourced' }
+  return { rate: DEFAULT_RATE_MEMBER, source: 'role_member' }
+}
+
 export const hoursRepo = {
   findByTask(taskId: string): TaskHours[] {
     const rows = db.prepare('SELECT * FROM task_hours WHERE task_id = ? ORDER BY date DESC').all(taskId) as SqlRow[]
@@ -1205,9 +1257,11 @@ export const hoursRepo = {
       return this.findById(existing.id as string)!
     }
     const id = genId()
+    // 登记时冻结当时生效单价（改价不追溯历史工时）
+    const { rate, source } = resolveHourlyRate(data.userId, data.taskId)
     db.prepare(
-      'INSERT INTO task_hours (id, task_id, user_id, date, planned_hours, actual_hours, billed_hours, description, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-    ).run(id, data.taskId, data.userId, data.date, data.plannedHours || 0, data.actualHours || 0, data.billedHours || 0, data.description || '', new Date().toISOString())
+      'INSERT INTO task_hours (id, task_id, user_id, date, planned_hours, actual_hours, billed_hours, description, rate_snapshot, rate_source, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    ).run(id, data.taskId, data.userId, data.date, data.plannedHours || 0, data.actualHours || 0, data.billedHours || 0, data.description || '', rate, source, new Date().toISOString())
     return this.findById(id)!
   },
   update(id: string, data: Partial<{ plannedHours: number; actualHours: number; billedHours: number; description: string }>): void {
@@ -1274,6 +1328,8 @@ function rowToHours(r: SqlRow): TaskHours {
     id: r.id, taskId: r.task_id, userId: r.user_id,
     date: r.date, plannedHours: Number(r.planned_hours),
     actualHours: Number(r.actual_hours), billedHours: Number(r.billed_hours) || 0, description: r.description || '',
+    rateSnapshot: r.rate_snapshot != null ? Number(r.rate_snapshot) : null,
+    rateSource: (r.rate_source as HourlyRateSource) || null,
     createdAt: r.created_at,
   }
 }

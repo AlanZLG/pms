@@ -286,6 +286,10 @@ export interface TaskHours {
   /** 计费工数（向客户结算口径） */
   billedHours: number
   description: string
+  /** 登记时冻结的单价快照（个人价 > 类别价 > 角色默认价；改价不追溯历史，空为旧数据回填前） */
+  rateSnapshot?: number | null
+  /** 快照来源：user / category / role_owner / role_member / role_outsourced */
+  rateSource?: string | null
   createdAt: string
   /** 以下字段仅在工时报表（/stats/hours）返回时填充 */
   projectId?: string | null
@@ -329,7 +333,12 @@ export interface ProjectCostSummary {
             userId: string
             userName: string
             isOutsourced: boolean
+            /** 实际加权均价（有工时时 = 总成本/总工时，混合快照价也精确） */
             hourlyRate: number | null
+            /** 当前生效价（个人价 > 类别价 > 角色默认价），改价后新工时按此价 */
+            liveRate?: number
+            /** 单价来源：user / category / role_owner / role_member / role_outsourced / mixed / live */
+            rateSource?: string
             totalHours: number
             totalCost: number
             categoryName: string | null

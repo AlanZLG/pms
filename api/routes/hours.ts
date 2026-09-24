@@ -1,6 +1,6 @@
 import { Router, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
-import { hoursRepo, taskRepo, userRepo, taskPlannedSummary } from '../repository/repo.ts'
+import { hoursRepo, taskRepo, userRepo, taskPlannedSummary, DEFAULT_RATE_OWNER, DEFAULT_RATE_MEMBER, DEFAULT_RATE_OUTSOURCED } from '../repository/repo.ts'
 import { authRequired, financeRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import db, { type SqlRow, type SqlParam } from '../db.ts'
@@ -9,11 +9,9 @@ import { resolveScope } from './stats.ts'
 const router = Router()
 router.use(authRequired)
 
-// 默认时薪（RMB/h）：项目负责人 200 / 成员 150 / 外包 125
+// 默认时薪（RMB/h）：项目负责人 200 / 成员 150 / 外包 125（常量与单价解析统一在 repo.ts）
 // 生效优先级：个人时薪(u.hourly_rate) > 人员类别时薪(uc.hourly_rate) > 项目角色默认价 > 0
-const DEFAULT_RATE_OWNER = 200
-const DEFAULT_RATE_MEMBER = 150
-const DEFAULT_RATE_OUTSOURCED = 125
+// 成本口径：优先用工时登记时冻结的快照单价(th.rate_snapshot)，改价不追溯历史
 
 const createSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式不正确'),
@@ -365,6 +363,7 @@ router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Respo
     `).all(...ids, ...ids) as SqlRow[]
 
     // 人员成本：一次查全部项目（替代原来每项目两查的 N+1）
+    // 成本按行计价：优先用工时登记时冻结的快照单价，旧数据（快照为空）回退实时价
     const memberRows = db.prepare(`
       SELECT t.project_id as project_id,
              u.id as user_id, u.name as user_name, u.role as user_role,
@@ -373,9 +372,15 @@ router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Respo
                CASE WHEN pm.role = 'owner' THEN ${DEFAULT_RATE_OWNER}
                     WHEN COALESCE(u.is_outsourced, uc.is_outsourced, 0) = 1 THEN ${DEFAULT_RATE_OUTSOURCED}
                     ELSE ${DEFAULT_RATE_MEMBER} END,
-               0) as hourly_rate,
+               0) as live_rate,
              CASE WHEN pm.role = 'owner' THEN 1 ELSE 0 END as is_project_owner,
-             SUM(th.actual_hours) as total_hours
+             SUM(th.actual_hours) as total_hours,
+             SUM(th.actual_hours * COALESCE(th.rate_snapshot, COALESCE(u.hourly_rate, uc.hourly_rate,
+               CASE WHEN pm.role = 'owner' THEN ${DEFAULT_RATE_OWNER}
+                    WHEN COALESCE(u.is_outsourced, uc.is_outsourced, 0) = 1 THEN ${DEFAULT_RATE_OUTSOURCED}
+                    ELSE ${DEFAULT_RATE_MEMBER} END, 0))) as total_cost,
+             COUNT(DISTINCT th.rate_source) as rate_source_count,
+             MAX(th.rate_source) as rate_source
       FROM task_hours th
       JOIN tasks t ON th.task_id = t.id
       JOIN users u ON th.user_id = u.id
@@ -398,7 +403,7 @@ router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Respo
       totalExpense: number
       remainingBudget: number
       costByCategory: { category: string; budget: number; expense: number; hours: number; cost: number }[]
-      memberCosts: { userId: string; userName: string; isOutsourced: boolean; hourlyRate: number; totalHours: number; totalCost: number; categoryName: string | null }[]
+      memberCosts: { userId: string; userName: string; isOutsourced: boolean; hourlyRate: number; liveRate: number; rateSource: string; totalHours: number; totalCost: number; categoryName: string | null }[]
     }
 
     const getMemberSortOrder = (mr: SqlRow) => {
@@ -434,15 +439,21 @@ router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Respo
           cost: 0,
         })),
         memberCosts: members.map((mr) => {
-          const rate = Number(mr.hourly_rate) || 0
           const hours = Number(mr.total_hours) || 0
+          const totalCost = Number(mr.total_cost) || 0
+          const liveRate = Number(mr.live_rate) || 0
+          const rateSources = Number(mr.rate_source_count) || 0
+          // 实际加权均价（快照价混合时取成本/工时），无工时时展示当前生效价
+          const effectiveRate = hours > 0 ? totalCost / hours : liveRate
           return {
             userId: mr.user_id as string,
             userName: mr.user_name as string,
             isOutsourced: mr.is_outsourced === 1,
-            hourlyRate: rate,
+            hourlyRate: effectiveRate,
+            liveRate,
+            rateSource: rateSources > 1 ? 'mixed' : ((mr.rate_source as string) || 'live'),
             totalHours: hours,
-            totalCost: rate * hours,
+            totalCost,
             categoryName: mr.category_name || null,
           }
         }),

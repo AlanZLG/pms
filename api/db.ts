@@ -416,6 +416,15 @@ try {
       db.exec('ALTER TABLE task_hours ADD COLUMN billed_hours DECIMAL(6,2) NOT NULL DEFAULT 0')
       console.log('[db] 已添加 billed_hours 字段到 task_hours 表')
     }
+    // 工时单价快照：登记时冻结当时生效单价（个人价 > 类别价 > 角色默认价），改价不追溯历史
+    if (!hourCols.includes('rate_snapshot')) {
+      db.exec('ALTER TABLE task_hours ADD COLUMN rate_snapshot DECIMAL(10,2)')
+      console.log('[db] 已添加 rate_snapshot 字段到 task_hours 表')
+    }
+    if (!hourCols.includes('rate_source')) {
+      db.exec("ALTER TABLE task_hours ADD COLUMN rate_source TEXT")
+      console.log('[db] 已添加 rate_source 字段到 task_hours 表')
+    }
   } catch {
     // 迁移已执行过，忽略重复添加字段错误
   }
@@ -539,6 +548,8 @@ CREATE TABLE IF NOT EXISTS task_hours (
   actual_hours DECIMAL(6,2) NOT NULL DEFAULT 0,
   billed_hours DECIMAL(6,2) NOT NULL DEFAULT 0,
   description TEXT,
+  rate_snapshot DECIMAL(10,2),
+  rate_source TEXT,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -583,6 +594,16 @@ CREATE TABLE IF NOT EXISTS project_activity_log (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_pactivity_project ON project_activity_log(project_id, created_at);
+
+CREATE TABLE IF NOT EXISTS system_activity_log (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  action TEXT NOT NULL,
+  target TEXT,
+  detail TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sactivity_created ON system_activity_log(created_at);
 
 CREATE TABLE IF NOT EXISTS op_logs (
   id TEXT PRIMARY KEY,
@@ -1301,10 +1322,12 @@ try {
         actual_hours DECIMAL(6,2) NOT NULL DEFAULT 0,
         billed_hours DECIMAL(6,2) NOT NULL DEFAULT 0,
         description TEXT,
+        rate_snapshot DECIMAL(10,2),
+        rate_source TEXT,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
-      INSERT INTO task_hours_new (id, task_id, user_id, date, planned_hours, actual_hours, billed_hours, description, created_at)
-        SELECT id, task_id, user_id, date, planned_hours, actual_hours, COALESCE(billed_hours, 0), description, created_at FROM task_hours;
+      INSERT INTO task_hours_new (id, task_id, user_id, date, planned_hours, actual_hours, billed_hours, description, rate_snapshot, rate_source, created_at)
+        SELECT id, task_id, user_id, date, planned_hours, actual_hours, COALESCE(billed_hours, 0), description, rate_snapshot, rate_source, created_at FROM task_hours;
       DROP TABLE task_hours;
       ALTER TABLE task_hours_new RENAME TO task_hours;
       CREATE INDEX IF NOT EXISTS idx_hours_task ON task_hours(task_id);
@@ -1316,6 +1339,38 @@ try {
   }
 } catch (e) {
   console.error('[db] 重建 task_hours 表失败:', e)
+}
+
+// 历史工时单价一次性冻结回填：按当前生效口径（个人价 > 类别价 > 角色默认价 owner=200/外包=125/成员=150）
+// 为快照为空的工时补写单价与来源，此后改价只影响新登记工时（幂等：仅处理 rate_snapshot IS NULL 的行）
+try {
+  const backfilled = db.prepare(`
+    UPDATE task_hours SET rate_snapshot = COALESCE(
+      (SELECT u.hourly_rate FROM users u WHERE u.id = task_hours.user_id),
+      (SELECT uc.hourly_rate FROM users u LEFT JOIN user_categories uc ON u.category_id = uc.id WHERE u.id = task_hours.user_id),
+      (SELECT CASE WHEN pm.role = 'owner' THEN 200
+                   WHEN COALESCE((SELECT u.is_outsourced FROM users u WHERE u.id = task_hours.user_id),
+                                 (SELECT uc.is_outsourced FROM users u LEFT JOIN user_categories uc ON u.category_id = uc.id WHERE u.id = task_hours.user_id), 0) = 1
+                   THEN 125 ELSE 150 END
+       FROM tasks t
+       LEFT JOIN project_members pm ON pm.project_id = t.project_id AND pm.user_id = task_hours.user_id
+       WHERE t.id = task_hours.task_id LIMIT 1),
+      0)
+    WHERE rate_snapshot IS NULL
+  `).run()
+  db.prepare(`
+    UPDATE task_hours SET rate_source = CASE
+      WHEN EXISTS(SELECT 1 FROM users u WHERE u.id = task_hours.user_id AND u.hourly_rate IS NOT NULL) THEN 'user'
+      WHEN EXISTS(SELECT 1 FROM users u JOIN user_categories uc ON u.category_id = uc.id WHERE u.id = task_hours.user_id AND uc.hourly_rate IS NOT NULL) THEN 'category'
+      WHEN EXISTS(SELECT 1 FROM tasks t JOIN project_members pm ON pm.project_id = t.project_id AND pm.user_id = task_hours.user_id WHERE t.id = task_hours.task_id AND pm.role = 'owner') THEN 'role_owner'
+      WHEN COALESCE((SELECT u.is_outsourced FROM users u WHERE u.id = task_hours.user_id),
+                    (SELECT uc.is_outsourced FROM users u LEFT JOIN user_categories uc ON u.category_id = uc.id WHERE u.id = task_hours.user_id), 0) = 1 THEN 'role_outsourced'
+      ELSE 'role_member' END
+    WHERE rate_snapshot IS NOT NULL AND rate_source IS NULL
+  `).run()
+  if (backfilled.changes > 0) console.log(`[db] 已冻结回填 ${backfilled.changes} 条历史工时的单价快照`)
+} catch (e) {
+  console.error('[db] 历史工时单价回填失败:', e)
 }
 
 // 添加 deleted_at 字段到 projects 表（软删除）

@@ -597,10 +597,80 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     await req('DELETE', `/projects/${pid}`, undefined, adminToken)
   })
 
+  it('人员类别操作日志：创建/修改/删除全程留痕，member 无权查询', async () => {
+    // 守卫：类别管理及其日志仅 admin/finance 可访问
+    const forbidden = await req('GET', '/team/categories/activity-log', undefined, memberToken)
+    expect(forbidden.status).toBe(403)
+
+    const name = `日志类别${Date.now()}`
+    const created = await req('POST', '/team/categories', { name, hourlyRate: 120, isOutsourced: false }, adminToken)
+    expect(created.status).toBe(201)
+    const cat = created.json.category as { id: string }
+    const updated = await req('PUT', `/team/categories/${cat.id}`, { hourlyRate: 130 }, adminToken)
+    expect(updated.status).toBe(200)
+    const deleted = await req('DELETE', `/team/categories/${cat.id}`, undefined, adminToken)
+    expect(deleted.status).toBe(200)
+
+    // 日志回读：三条留痕齐全，修改明细包含价格变化
+    const log = await req('GET', '/team/categories/activity-log', undefined, adminToken)
+    expect(log.status).toBe(200)
+    const rows = log.json.rows as Array<{ action: string; target: string | null; detail: string | null; userName: string }>
+    const mine = rows.filter((r) => r.target === name)
+    expect(mine.map((r) => r.action).sort()).toEqual(['category_create', 'category_delete', 'category_update'])
+    expect(mine.find((r) => r.action === 'category_update')!.detail).toContain('¥120 → ¥130')
+    expect(mine.every((r) => r.userName === 'Alan')).toBe(true)
+  })
+
   it('角色分配守卫：非管理员 403 / 非法角色 400', async () => {
     const forbidden = await req('PATCH', `/team/${memberId}/role`, { role: 'admin' }, memberToken)
     expect(forbidden.status).toBe(403)
     const badRole = await req('PATCH', `/team/${memberId}/role`, { role: 'superadmin' }, adminToken)
     expect(badRole.status).toBe(400)
+  })
+
+  it('工时单价快照：旧工时按登记时价计成本，改类别价不追溯，新工时按新价', async () => {
+    // member 已在本项目 taskId 登记 5h 实际工时（登记时无个人/类别价 → 快照 = 成员默认 150）
+    const readMemberCost = async () => {
+      const r = await req('GET', '/stats/project-cost', undefined, adminToken)
+      expect(r.status).toBe(200)
+      const p = (r.json.data as Array<{ projectId: string; memberCosts: Array<{ userId: string; hourlyRate: number; rateSource: string; totalHours: number; totalCost: number }> }>)
+        .find((x) => x.projectId === projectId)!
+      return p.memberCosts.find((m) => m.userId === memberId)!
+    }
+
+    // 改价前：5h × 150（登记时快照）
+    const before = await readMemberCost()
+    expect(before.totalHours).toBe(5)
+    expect(before.totalCost).toBe(750)
+    expect(before.hourlyRate).toBe(150)
+    expect(before.rateSource).toBe('role_member')
+
+    // 绑定类别（300/h）→ 当前生效价变了，但旧工时成本保持快照不变
+    const created = await req('POST', '/team/categories', { name: `快照类别${Date.now()}`, hourlyRate: 300, isOutsourced: false }, adminToken)
+    expect(created.status).toBe(201)
+    const catId = (created.json.category as { id: string }).id
+    await req('PATCH', `/team/${memberId}/cost`, { categoryId: catId }, adminToken)
+    const afterBind = await readMemberCost()
+    expect(afterBind.totalCost).toBe(750)
+    expect(afterBind.rateSource).toBe('role_member')
+
+    // 类别改价 300 → 350：旧工时成本仍不变
+    const reprice = await req('PUT', `/team/categories/${catId}`, { hourlyRate: 350 }, adminToken)
+    expect(reprice.status).toBe(200)
+    const afterReprice = await readMemberCost()
+    expect(afterReprice.totalCost).toBe(750)
+
+    // 新登记工时（不同日期避免同日累加）按新价 350：3h → 总成本 750 + 1050 = 1800（混合快照价）
+    const add = await req('POST', `/tasks/${taskId}/hours`, { date: '2026-09-25', actualHours: 3 }, memberToken)
+    expect(add.status).toBe(201)
+    const afterAdd = await readMemberCost()
+    expect(afterAdd.totalHours).toBe(8)
+    expect(afterAdd.totalCost).toBe(1800)
+    expect(afterAdd.hourlyRate).toBe(225)
+    expect(afterAdd.rateSource).toBe('mixed')
+
+    // 清理：解绑类别后删除（删除守卫要求先解绑成员）
+    await req('PATCH', `/team/${memberId}/cost`, { categoryId: null }, adminToken)
+    await req('DELETE', `/team/categories/${catId}`, undefined, adminToken)
   })
 })

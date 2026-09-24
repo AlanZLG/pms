@@ -162,6 +162,15 @@ export function createTestDb(): Database.Database {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS system_activity_log (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target TEXT,
+      detail TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS task_hours (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL,
@@ -171,6 +180,17 @@ export function createTestDb(): Database.Database {
       actual_hours DECIMAL(6,2) NOT NULL DEFAULT 0,
       billed_hours DECIMAL(6,2) NOT NULL DEFAULT 0,
       description TEXT,
+      rate_snapshot DECIMAL(10,2),
+      rate_source TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS user_categories (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      hourly_rate DECIMAL(8,2) NOT NULL DEFAULT 0,
+      is_outsourced INTEGER NOT NULL DEFAULT 0 CHECK(is_outsourced IN (0,1)),
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -261,6 +281,24 @@ export function seedSubtask(db: Database.Database, taskId: string, opts: { id?: 
     'INSERT INTO subtasks (id, task_id, title, done, sort_order, created_at) VALUES (?,?,?,?,?,?)',
   ).run(id, taskId, opts.title || '子任务', opts.done ? 1 : 0, 0, new Date().toISOString())
   return id
+}
+
+/** 插入测试人员类别，返回 categoryId */
+export function seedCategory(
+  db: Database.Database,
+  opts: { id?: string; name?: string; hourlyRate?: number; isOutsourced?: boolean } = {},
+): string {
+  const id = opts.id || genId()
+  db.prepare(
+    'INSERT INTO user_categories (id, name, hourly_rate, is_outsourced, created_at) VALUES (?,?,?,?,?)',
+  ).run(id, opts.name || `类别-${id}`, opts.hourlyRate ?? 0, opts.isOutsourced ? 1 : 0, new Date().toISOString())
+  return id
+}
+
+/** 设置用户的类别/个人价/外包标记（成本口径测试用） */
+export function seedUserCost(db: Database.Database, userId: string, opts: { categoryId?: string | null; hourlyRate?: number | null; isOutsourced?: boolean } = {}): void {
+  db.prepare('UPDATE users SET category_id = COALESCE(?, category_id), hourly_rate = ?, is_outsourced = ? WHERE id = ?')
+    .run(opts.categoryId ?? null, opts.hourlyRate ?? null, opts.isOutsourced ? 1 : 0, userId)
 }
 
 /** 插入测试运维台账，返回 opLogId */

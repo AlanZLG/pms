@@ -42,6 +42,16 @@ const COST_SORTABLE: { key: string; label: string; defaultDir: string; align?: '
   { key: 'totalCost', label: '总成本(RMB)', defaultDir: 'desc', align: 'right' },
 ]
 
+// 单价来源徽标：登记时冻结快照（个人/类别/角色默认），混合 = 该人有多种快照价
+const RATE_SOURCE_BADGE: Record<string, string> = {
+  user: '个人价',
+  category: '类别价',
+  role_owner: '角色价',
+  role_member: '角色价',
+  role_outsourced: '角色价',
+  mixed: '混合',
+}
+
 // 日期格式化为 YYYY-MM-DD
 const fmtDate = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -801,7 +811,14 @@ export default function HoursReport() {
                               {member.isOutsourced ? '外包' : '内部'}
                             </span>
                           </td>
-                          <td className="py-2 px-3 text-right font-mono text-text-secondary">{member.hourlyRate || '-'}</td>
+                          <td className="py-2 px-3 text-right font-mono text-text-secondary">
+                            {member.hourlyRate || '-'}
+                            {RATE_SOURCE_BADGE[member.rateSource || ''] && (
+                              <span title={`单价来源：${RATE_SOURCE_BADGE[member.rateSource || '']}`} className="ml-1 text-[10px] text-muted align-middle">
+                                {RATE_SOURCE_BADGE[member.rateSource || '']}
+                              </span>
+                            )}
+                          </td>
                           <td className="py-2 px-3 text-right font-mono text-text-secondary">{member.totalHours.toFixed(1)}</td>
                           <td className="py-2 px-3 text-right font-mono text-text-primary">{member.totalCost.toLocaleString()}</td>
                         </tr>
