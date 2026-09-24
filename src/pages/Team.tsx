@@ -5,7 +5,7 @@ import { getErrorMessage } from '@/lib/errors'
 import { Card, Avatar, Skeleton, EmptyState, Button, Input } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
 import { sortUsers } from '@/lib/utils'
-import { Settings2, Plus, X, Trash2, Edit2 } from 'lucide-react'
+import { Settings2, Plus, X, Trash2, Edit2, History } from 'lucide-react'
 import type { UserRole, UserCategory } from '../../shared/types'
 
 const roleList: { value: UserRole; label: string }[] = [
@@ -22,6 +22,10 @@ export default function Team() {
   const me = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
   const [showCategoryDialog, setShowCategoryDialog] = useState(false)
+  const [showCategoryManager, setShowCategoryManager] = useState(false)
+  const [showCategoryLog, setShowCategoryLog] = useState(false)
+  const [categoryLogRows, setCategoryLogRows] = useState<Array<{ id: string; action: string; target: string | null; detail: string | null; userName: string; createdAt: string }>>([])
+  const [categoryLogLoading, setCategoryLogLoading] = useState(false)
   const [editingCategory, setEditingCategory] = useState<UserCategory | null>(null)
   const [categoryForm, setCategoryForm] = useState({ name: '', description: '', hourlyRate: 0, isOutsourced: false })
   const [userCostDialog, setUserCostDialog] = useState<string | null>(null)
@@ -96,6 +100,19 @@ export default function Team() {
       notify('error', getErrorMessage(e, '删除失败'))
     }
   }, [notify, categories])
+
+  const openCategoryLog = useCallback(async () => {
+    setShowCategoryLog(true)
+    setCategoryLogLoading(true)
+    try {
+      const res = await api.getCategoryActivities()
+      setCategoryLogRows(res.rows)
+    } catch (e) {
+      notify('error', getErrorMessage(e, '日志加载失败'))
+    } finally {
+      setCategoryLogLoading(false)
+    }
+  }, [notify])
 
   const openCategoryDialog = useCallback((category?: UserCategory) => {
     if (category) {
@@ -180,53 +197,19 @@ export default function Team() {
           <h2 className="font-display text-2xl text-text-primary">团队协作</h2>
           <p className="mt-1 text-sm text-muted">查看成员并配置权限</p>
         </div>
-        {isAdmin && (
-          <Button onClick={() => { setCreateForm({ email: '', name: '', password: '', role: 'member' }); setCreateError(''); setShowCreateDialog(true) }} className="text-sm gap-1">
-            <Plus className="h-4 w-4" /> 新建成员
-          </Button>
-        )}
-      </div>
-
-      {isFinance && (
-        <Card className="p-5">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-display text-lg text-text-primary flex items-center gap-2">
-              <Settings2 className="h-5 w-5 text-brand-soft" /> 人员类别管理
-            </h3>
-            <Button onClick={() => openCategoryDialog()} className="text-sm gap-1">
-              <Plus className="h-4 w-4" /> 添加类别
+        <div className="flex items-center gap-2">
+          {isFinance && (
+            <Button variant="ghost" onClick={() => setShowCategoryManager(true)} className="text-sm gap-1">
+              <Settings2 className="h-4 w-4" /> 人员类别
             </Button>
-          </div>
-          {categories.loading ? (
-            <Skeleton className="h-24" />
-          ) : categories.data?.categories.length === 0 ? (
-            <EmptyState title="暂无类别" />
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {categories.data?.categories.map((cat) => (
-                <div key={cat.id} className="rounded-lg bg-bg-soft p-4 flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-text-primary">{cat.name}</span>
-                      {cat.isOutsourced && <span className="text-xs px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded">外包</span>}
-                    </div>
-                    <div className="text-sm text-muted mt-1">¥{cat.hourlyRate}/小时</div>
-                    {cat.description && <div className="text-xs text-muted mt-1">{cat.description}</div>}
-                  </div>
-                  <div className="flex gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => openCategoryDialog(cat)}>
-                      <Edit2 className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="sm" className="text-red-400" onClick={() => deleteCategory(cat.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
           )}
-        </Card>
-      )}
+          {isAdmin && (
+            <Button onClick={() => { setCreateForm({ email: '', name: '', password: '', role: 'member' }); setCreateError(''); setShowCreateDialog(true) }} className="text-sm gap-1">
+              <Plus className="h-4 w-4" /> 新建成员
+            </Button>
+          )}
+        </div>
+      </div>
 
       {users.loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -357,6 +340,91 @@ export default function Team() {
         <EmptyState title="暂无成员" />
       )}
 
+      {showCategoryManager && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCategoryManager(false)}>
+          <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-h-[85vh] overflow-y-auto max-w-lg shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-display text-lg text-text-primary">人员类别管理</h3>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" title="类别操作日志" onClick={openCategoryLog}>
+                  <History className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setShowCategoryManager(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {categories.loading ? (
+                <Skeleton className="h-24" />
+              ) : categories.data?.categories.length === 0 ? (
+                <EmptyState title="暂无类别" />
+              ) : (
+                categories.data?.categories.map((cat) => (
+                  <div key={cat.id} className="rounded-lg bg-bg-soft p-4 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-text-primary">{cat.name}</span>
+                        {cat.isOutsourced && <span className="text-xs px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded">外包</span>}
+                      </div>
+                      <div className="text-sm text-muted mt-1">¥{cat.hourlyRate}/小时</div>
+                      {cat.description && <div className="text-xs text-muted mt-1">{cat.description}</div>}
+                    </div>
+                    <div className="flex gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => openCategoryDialog(cat)}>
+                        <Edit2 className="h-4 w-4" />
+                      </Button>
+                      <Button variant="ghost" size="sm" className="text-red-400" onClick={() => deleteCategory(cat.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="flex justify-end gap-2 mt-6">
+              <Button onClick={() => openCategoryDialog()} className="text-sm gap-1">
+                <Plus className="h-4 w-4" /> 添加类别
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCategoryLog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCategoryLog(false)}>
+          <div className="flex max-h-[70vh] w-full max-w-lg flex-col rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-display text-lg text-text-primary">类别操作日志</h3>
+              <Button variant="ghost" size="sm" onClick={() => setShowCategoryLog(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="flex-1 space-y-2.5 overflow-y-auto">
+              {categoryLogLoading && <Skeleton className="h-24" />}
+              {!categoryLogLoading && categoryLogRows.length === 0 && (
+                <p className="py-6 text-center text-sm text-muted">暂无操作日志</p>
+              )}
+              {!categoryLogLoading && categoryLogRows.map((r) => (
+                <div key={r.id} className="rounded-lg border border-bg-border bg-bg-soft px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm font-medium text-text-primary">
+                      {r.action === 'category_create' ? '新建类别' : r.action === 'category_update' ? '修改类别' : r.action === 'category_delete' ? '删除类别' : r.action}
+                      {r.target ? ` · ${r.target}` : ''}
+                    </span>
+                    <span className="text-xs text-muted">{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted">{r.userName}：{r.detail}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 flex justify-end">
+              <Button variant="ghost" onClick={() => setShowCategoryLog(false)}>关闭</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCategoryDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCategoryDialog(false)}>
           <div className="bg-bg-panel border border-bg-border rounded-2xl p-6 w-full max-h-[85vh] overflow-y-auto max-w-md shadow-xl" onClick={(e) => e.stopPropagation()}>
@@ -378,6 +446,7 @@ export default function Team() {
               <div>
                 <label className="text-sm text-muted mb-1 block">小时单价 (RMB)</label>
                 <Input type="number" value={categoryForm.hourlyRate} onChange={(e) => setCategoryForm({ ...categoryForm, hourlyRate: Number(e.target.value) || 0 })} className="bg-bg-soft" />
+                <p className="text-xs text-muted mt-1">改价仅影响此后新登记的工时，历史工时成本保持登记时的价格不变</p>
               </div>
               <div className="flex items-center gap-2">
                 <input type="checkbox" checked={categoryForm.isOutsourced} onChange={(e) => setCategoryForm({ ...categoryForm, isOutsourced: e.target.checked })} className="rounded" />
@@ -487,6 +556,7 @@ export default function Team() {
               <div>
                 <label className="text-sm text-muted mb-1 block">小时单价 (RMB) - 留空使用类别默认</label>
                 <Input type="number" value={userCostForm.hourlyRate || ''} onChange={(e) => setUserCostForm({ ...userCostForm, hourlyRate: e.target.value ? Number(e.target.value) : null })} className="bg-bg-soft" />
+                <p className="text-xs text-muted mt-1">改价仅影响此后新登记的工时，历史工时成本保持登记时的价格不变</p>
               </div>
               <div>
                 <label className="text-sm text-muted mb-1 block">成本中心</label>

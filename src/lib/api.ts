@@ -108,6 +108,8 @@ export const api = {
   // 项目操作日志（负责人转移、人员替换等）
   getProjectActivities: (id: string) =>
     request<{ rows: Array<{ id: string; action: string; detail: string | null; userName: string; createdAt: string }> }>(`/api/projects/${id}/activities`),
+  getCategoryActivities: () =>
+    request<{ rows: Array<{ id: string; action: string; target: string | null; detail: string | null; userName: string; createdAt: string }> }>('/api/team/categories/activity-log'),
   deleteProject: (id: string) =>
     request<{ ok?: boolean; pendingApproval?: boolean; message?: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
   listPendingDeletions: () => request<{ projects: Project[] }>('/api/projects/pending-deletions'),

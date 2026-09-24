@@ -3,7 +3,7 @@
 import { Router, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
 import bcrypt from 'bcrypt'
-import { userRepo, taskRepo, projectRepo, categoryRepo, customRoleRepo, rolePermissionRepo } from '../repository/repo.ts'
+import { userRepo, taskRepo, projectRepo, categoryRepo, customRoleRepo, rolePermissionRepo, systemActivityLogRepo } from '../repository/repo.ts'
 import { authRequired, financeRequired, type AuthRequest } from '../lib/auth.ts'
 import { ApiError } from '../lib/utils.ts'
 import type { UserRole } from '../../shared/types.ts'
@@ -216,7 +216,20 @@ router.post('/categories', financeRequired, (req: AuthRequest, res: Response, ne
       hourlyRate: parsed.data.hourlyRate,
       isOutsourced: parsed.data.isOutsourced,
     })
+    systemActivityLogRepo.create(
+      req.userId!,
+      'category_create',
+      category.name,
+      `新建类别「${category.name}」，单价 ¥${category.hourlyRate}/小时${category.isOutsourced ? '（外包）' : ''}`,
+    )
     res.status(201).json({ category })
+  } catch (e) { next(e) }
+})
+
+// 类别操作日志查询（放在 /categories/:categoryId 之前避免路由遮蔽）
+router.get('/categories/activity-log', financeRequired, (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    res.json({ rows: systemActivityLogRepo.findAll() })
   } catch (e) { next(e) }
 })
 
@@ -230,14 +243,24 @@ router.put('/categories/:categoryId', financeRequired, (req: AuthRequest, res: R
     })
     const parsed = schema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const old = categoryRepo.findById(req.params.categoryId)
     categoryRepo.update(req.params.categoryId, parsed.data)
-    res.json({ category: categoryRepo.findById(req.params.categoryId) })
+    const updated = categoryRepo.findById(req.params.categoryId)
+    const changes: string[] = []
+    if (parsed.data.name !== undefined && parsed.data.name !== old?.name) changes.push(`名称「${old?.name}」→「${parsed.data.name}」`)
+    if (parsed.data.hourlyRate !== undefined && parsed.data.hourlyRate !== old?.hourlyRate) changes.push(`单价 ¥${old?.hourlyRate} → ¥${parsed.data.hourlyRate}/小时`)
+    if (parsed.data.isOutsourced !== undefined && parsed.data.isOutsourced !== old?.isOutsourced) changes.push(`外包标记 ${old?.isOutsourced ? '是' : '否'} → ${parsed.data.isOutsourced ? '是' : '否'}`)
+    if (parsed.data.description !== undefined && parsed.data.description !== old?.description) changes.push('描述已更新')
+    systemActivityLogRepo.create(req.userId!, 'category_update', updated?.name ?? old?.name, changes.length ? changes.join('；') : '保存（无字段变更）')
+    res.json({ category: updated })
   } catch (e) { next(e) }
 })
 
 router.delete('/categories/:categoryId', financeRequired, (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
+    const old = categoryRepo.findById(req.params.categoryId)
     categoryRepo.delete(req.params.categoryId)
+    systemActivityLogRepo.create(req.userId!, 'category_delete', old?.name, `删除类别「${old?.name}」（¥${old?.hourlyRate}/小时）`)
     res.json({ success: true })
   } catch (e) { next(e) }
 })
