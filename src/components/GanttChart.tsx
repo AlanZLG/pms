@@ -354,9 +354,10 @@ export default function GanttChart({
     const dayIndex = Math.floor(x / dayWidth)
     const startDate = addDays(minDate, dayIndex)
     const dueDate = addDays(startDate, 1)
+    // 传本地日期字符串而非 toISOString（UTC），否则东八区下弹窗预填日期会提前一天
     onCreateTask({
-      startDate: startDate.toISOString(),
-      dueDate: dueDate.toISOString(),
+      startDate: toDateInputValue(startDate),
+      dueDate: toDateInputValue(dueDate),
     })
   }, [onCreateTask, dayWidth, minDate])
 
@@ -1532,4 +1533,11 @@ function dayOffset(start: Date, end: Date): number {
 }
 function sameDay(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+// 本地日期转 date-input 字符串（YYYY-MM-DD）。不能用 toISOString（UTC），否则东八区会偏移一天
+function toDateInputValue(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
