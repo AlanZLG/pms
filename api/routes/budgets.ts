@@ -26,6 +26,46 @@ const approveSchema = z.object({
   comment: z.string().max(500).optional().default(''),
 })
 
+const totalBudgetSchema = z.object({
+  totalBudget: z.number().min(0, '总预算不能为负').nullable(),
+})
+
+/** 总预算设置权限：admin/finance/项目负责人 */
+function assertTotalBudgetAccess(project: { ownerId: string }, role?: string, userId?: string): void {
+  if (role !== 'admin' && role !== 'finance' && project.ownerId !== userId) {
+    throw new ApiError(403, '仅项目负责人、财务或管理员可设置总预算')
+  }
+}
+
+/** 设置项目总预算（v1.9.4 自上而下预算控制；null 清除 = 不启用） */
+router.put('/projects/:projectId/total-budget', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    const currentUser = userRepo.findById(req.userId!)
+    assertTotalBudgetAccess(project, currentUser?.role, req.userId)
+    const parsed = totalBudgetSchema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const total = parsed.data.totalBudget
+    // 硬拦截语义：总额不得低于当前已分配额度（pending+approved），否则存量明细立即违规
+    const allocated = budgetRepo.sumAllocated(project.id)
+    if (total != null && total < allocated) throw new ApiError(400, `总预算不能低于当前已分配额度 ¥${allocated.toFixed(2)}`)
+    projectRepo.update(project.id, { totalBudget: total })
+    res.json({ project: projectRepo.findById(project.id)! })
+  } catch (e) { next(e) }
+})
+
+/** 总预算硬拦截校验：已分配（不含 excludeId 本身）+ 本次金额 不得超过总额 */
+function assertTotalBudgetLimit(projectId: string, amount: number, excludeId?: string): void {
+  const project = projectRepo.findById(projectId)
+  if (!project || project.totalBudget == null) return
+  const allocated = budgetRepo.sumAllocated(projectId, excludeId)
+  const remaining = project.totalBudget - allocated
+  if (amount > remaining + 1e-9) {
+    throw new ApiError(400, `超出项目总预算：剩余可分配 ¥${Math.max(remaining, 0).toFixed(2)}，本次申请 ¥${amount.toFixed(2)}`)
+  }
+}
+
 router.get('/projects/:projectId/budgets', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const project = projectRepo.findById(req.params.projectId)
@@ -53,6 +93,7 @@ router.post('/projects/:projectId/budgets', (req: AuthRequest, res: Response, ne
     }
     const parsed = createSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    assertTotalBudgetLimit(project.id, parsed.data.amount)
     const budget = budgetRepo.create({
       projectId: project.id,
       category: parsed.data.category as BudgetCategory,
@@ -78,6 +119,10 @@ router.patch('/budgets/:budgetId', (req: AuthRequest, res: Response, next: NextF
     }
     const parsed = updateSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    // 改金额/分类时同样受总预算硬拦截（排除自身当前占用）
+    if (parsed.data.amount !== undefined) {
+      assertTotalBudgetLimit(budget.projectId, parsed.data.amount, budget.id)
+    }
     budgetRepo.update(budget.id, parsed.data)
     res.json({ budget: budgetRepo.findById(budget.id)! })
   } catch (e) { next(e) }

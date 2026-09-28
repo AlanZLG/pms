@@ -363,6 +363,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/budgets/${budgetId}`, { method: 'DELETE' }),
   getBudgetSummary: (projectId: string) =>
     request<{ totalBudget: number; budgets: { id: string; category: BudgetCategory; amount: number; description: string; approvalStatus: string }[] }>(`/api/projects/${projectId}/budget-summary`),
+  setTotalBudget: (projectId: string, totalBudget: number) =>
+    request<{ project: Project }>(`/api/projects/${projectId}/total-budget`, { method: 'PUT', body: JSON.stringify({ totalBudget }) }),
   approveBudget: (budgetId: string, data: { comment?: string }) =>
     request<{ budget: ProjectBudget }>(`/api/budgets/${budgetId}/approve`, { method: 'POST', body: JSON.stringify(data) }),
   rejectBudget: (budgetId: string, data: { comment?: string }) =>

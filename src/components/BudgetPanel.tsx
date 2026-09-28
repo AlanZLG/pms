@@ -49,11 +49,19 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
 
   const budgets = useAsync<ProjectBudget[]>(() => api.listBudgets(projectId).then((r) => r.budgets), [projectId])
   const expenses = useAsync<ProjectExpense[]>(() => api.listExpenses(projectId).then((r) => r.expenses), [projectId])
+  const project = useAsync(() => api.getProject(projectId).then((r) => r.project), [projectId])
+
+  // v1.9.4 总预算控制：非空时明细分配（pending+approved）受硬拦截约束
+  const totalBudgetLimit = project.data?.totalBudget ?? null
+  const allocated = (budgets.data || []).filter((b) => b.approvalStatus !== 'rejected').reduce((sum, b) => sum + b.amount, 0)
+  const canManageTotal = isFinance || project.data?.ownerId === user?.id
+  const [showTotalModal, setShowTotalModal] = useState(false)
+  const [totalForm, setTotalForm] = useState(0)
 
   const filteredBudgets = isFinance ? budgets.data || [] : (budgets.data || []).filter(b => b.approvalStatus === 'approved')
   const totalBudget = filteredBudgets.reduce((sum, b) => sum + b.amount, 0) || 0
   const totalExpense = expenses.data?.reduce((sum, e) => sum + e.amount, 0) || 0
-  const remaining = totalBudget - totalExpense
+  const remaining = totalBudgetLimit != null ? totalBudgetLimit - allocated : totalBudget - totalExpense
 
   const [form, setForm] = useState({
     category: 'labor' as BudgetCategory,
@@ -76,15 +84,31 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
   }))
 
   const handleSaveBudget = async () => {
-    if (editingBudget) {
-      await api.updateBudget(editingBudget.id, form)
-    } else {
-      await api.createBudget(projectId, form)
+    try {
+      if (editingBudget) {
+        await api.updateBudget(editingBudget.id, form)
+      } else {
+        await api.createBudget(projectId, form)
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '保存失败')
+      return
     }
     setShowBudgetModal(false)
     setEditingBudget(null)
     setForm({ category: 'labor', amount: 0, description: '' })
     budgets.reload()
+  }
+
+  const handleSaveTotalBudget = async () => {
+    try {
+      await api.setTotalBudget(projectId, totalForm)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : '设置失败')
+      return
+    }
+    setShowTotalModal(false)
+    project.reload()
   }
 
   const handleSaveExpense = async () => {
@@ -175,12 +199,38 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card className="p-4">
-          <div className="flex items-center gap-2 text-xs text-muted">总预算</div>
+          <div className="flex items-center justify-between text-xs text-muted">
+            <span>总预算</span>
+            {canManageTotal && (
+              <button
+                onClick={() => { setTotalForm(totalBudgetLimit ?? 0); setShowTotalModal(true) }}
+                className="flex items-center gap-1 text-brand-soft hover:text-brand"
+              >
+                <Edit2 className="h-3 w-3" /> {totalBudgetLimit == null ? '设置' : '编辑'}
+              </button>
+            )}
+          </div>
+          <div className="mt-2 flex items-baseline gap-2">
+            {totalBudgetLimit == null ? (
+              <span className="text-sm text-muted">未设置（明细汇总模式）</span>
+            ) : (
+              <>
+                <span className="text-xl text-brand-soft">¥</span>
+                <span className="font-mono text-2xl font-semibold text-text-primary">{totalBudgetLimit.toLocaleString()}</span>
+              </>
+            )}
+          </div>
+          {totalBudgetLimit != null && (
+            <div className="mt-1 text-xs text-muted">明细超出总额将被拒绝</div>
+          )}
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-xs text-muted">已分配{totalBudgetLimit == null ? '（明细合计）' : ''}</div>
           <div className="mt-2 flex items-baseline gap-2">
             <span className="text-xl text-brand-soft">¥</span>
-            <span className="font-mono text-2xl font-semibold text-text-primary">{totalBudget.toLocaleString()}</span>
+            <span className="font-mono text-2xl font-semibold text-text-primary">{allocated.toLocaleString()}</span>
           </div>
           {!isFinance && budgets.data?.some(b => b.approvalStatus === 'pending') && (
             <div className="mt-1 text-xs text-warn">{budgets.data.filter(b => b.approvalStatus === 'pending').length} 项待审批</div>
@@ -336,6 +386,37 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
         </Card>
       </div>
 
+      {showTotalModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-sm rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg text-text-primary">设置项目总预算</h3>
+              <button onClick={() => setShowTotalModal(false)} className="p-1 text-muted hover:text-text-primary">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="mb-1.5 block text-xs text-muted">总预算金额</label>
+                <Input
+                  type="number"
+                  value={totalForm}
+                  onChange={(e) => setTotalForm(parseFloat(e.target.value) || 0)}
+                  placeholder="0"
+                  min="0"
+                />
+              </div>
+              <p className="text-xs text-muted">
+                各分类明细分配（待审批 + 已审批）合计不能超过总预算；已分配 ¥{allocated.toLocaleString()}，不能设置低于该额度
+              </p>
+            </div>
+            <div className="mt-6">
+              <Button onClick={handleSaveTotalBudget} className="w-full">保存</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showBudgetModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl max-h-[85vh] overflow-y-auto max-h-[85vh] overflow-y-auto">
@@ -376,6 +457,11 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
                   placeholder="请输入备注说明"
                 />
               </div>
+              {totalBudgetLimit != null && (
+                <div className={cn('rounded-lg p-3 text-xs', form.amount > totalBudgetLimit - allocated ? 'bg-danger/10 text-danger' : 'bg-bg-soft text-muted')}>
+                  剩余可分配 ¥{Math.max(totalBudgetLimit - allocated, 0).toLocaleString()}{form.amount > totalBudgetLimit - allocated && '，本次金额已超出总额'}
+                </div>
+              )}
               {!isFinance && (
                 <div className="rounded-lg bg-warn/10 p-3 text-xs text-warn">
                   提交后需等待项目核算人员审批

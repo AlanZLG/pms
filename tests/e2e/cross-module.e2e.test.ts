@@ -740,4 +740,41 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     const afterTarget = (after.json.budgets as Array<{ id: string; approvalStatus: string }>).find((b) => b.id === budgetId)
     expect(afterTarget?.approvalStatus).toBe('approved')
   })
+
+  it('总预算控制：设置总额 → 明细硬拦截 → 总额下限守卫 → 权限守卫', async () => {
+    // 前置：本项目已有 1200 approved 预算
+    // admin（负责人）设置总预算 1500 → 200，回读正确
+    const set = await req('PUT', `/projects/${projectId}/total-budget`, { totalBudget: 1500 }, adminToken)
+    expect(set.status).toBe(200)
+    expect((set.json.project as { totalBudget: number }).totalBudget).toBe(1500)
+
+    // 明细 400 超出剩余额度 300 → 400 硬拦截
+    const over = await req('POST', `/projects/${projectId}/budgets`, {
+      category: 'software', amount: 400, description: 'E2E 超额预算',
+    }, adminToken)
+    expect(over.status).toBe(400)
+
+    // 明细 300 正好到上限 → 201；再改金额到 500 → 400（排除自身后超出）
+    const edge = await req('POST', `/projects/${projectId}/budgets`, {
+      category: 'software', amount: 300, description: 'E2E 顶格预算',
+    }, adminToken)
+    expect(edge.status).toBe(201)
+    const edgeId = (edge.json.budget as { id: string }).id
+    const bump = await req('PATCH', `/budgets/${edgeId}`, { amount: 500 }, adminToken)
+    expect(bump.status).toBe(400)
+    await req('DELETE', `/budgets/${edgeId}`, undefined, adminToken)
+
+    // member（非负责人/财务）设置总额 → 403
+    const forbidden = await req('PUT', `/projects/${projectId}/total-budget`, { totalBudget: 9999 }, memberToken)
+    expect(forbidden.status).toBe(403)
+
+    // 总额不能低于当前已分配额度 1200 → 400
+    const tooLow = await req('PUT', `/projects/${projectId}/total-budget`, { totalBudget: 1000 }, adminToken)
+    expect(tooLow.status).toBe(400)
+
+    // 恢复：清除总额（null = 关闭总额控制），回读为 null
+    const restore = await req('PUT', `/projects/${projectId}/total-budget`, { totalBudget: null }, adminToken)
+    expect(restore.status).toBe(200)
+    expect((restore.json.project as { totalBudget: number | null }).totalBudget).toBeNull()
+  })
 })

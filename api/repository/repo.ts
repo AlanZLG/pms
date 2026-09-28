@@ -254,7 +254,7 @@ export const projectRepo = {
     ).run(genId(), id, data.ownerId, 'owner', new Date().toISOString())
     return this.findById(id)!
   },
-  update(id: string, data: Partial<{ name: string; description: string; status: ProjectStatus; startDate: string | null; dueDate: string | null; projectType: ProjectType | null }>): void {
+  update(id: string, data: Partial<{ name: string; description: string; status: ProjectStatus; startDate: string | null; dueDate: string | null; projectType: ProjectType | null; totalBudget: number | null }>): void {
     const fields: string[] = []
     const values: SqlParam[] = []
     if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name) }
@@ -263,6 +263,7 @@ export const projectRepo = {
     if (data.projectType !== undefined) { fields.push('project_type = ?'); values.push(data.projectType || null) }
     if (data.startDate !== undefined) { fields.push('start_date = ?'); values.push(data.startDate) }
     if (data.dueDate !== undefined) { fields.push('due_date = ?'); values.push(data.dueDate) }
+    if (data.totalBudget !== undefined) { fields.push('total_budget = ?'); values.push(data.totalBudget) }
     if (!fields.length) return
     values.push(id)
     db.prepare(`UPDATE projects SET ${fields.join(', ')} WHERE id = ?`).run(...values)
@@ -1031,6 +1032,7 @@ function rowToProject(r: SqlRow): Project {
     ownerId: r.owner_id, progress: r.progress,
     ownerName: r.owner_name || '', ownerAvatar: r.owner_avatar || '',
     startDate: r.start_date || null, dueDate: r.due_date, createdAt: r.created_at,
+    totalBudget: r.total_budget ?? null,
     deletedAt: r.deleted_at || null,
     deleteRequestedBy: r.delete_requested_by || null,
     deleteRequestedAt: r.delete_requested_at || null,
@@ -1123,6 +1125,13 @@ export const budgetRepo = {
   findByProject(projectId: string): ProjectBudget[] {
     const rows = db.prepare('SELECT * FROM project_budgets WHERE project_id = ? ORDER BY created_at DESC').all(projectId) as SqlRow[]
     return rows.map(rowToBudget)
+  },
+  /** 已分配额度（待审批 + 已审批占用，拒绝不占），用于总预算硬拦截校验 */
+  sumAllocated(projectId: string, excludeId?: string): number {
+    const row = db.prepare(
+      `SELECT COALESCE(SUM(amount), 0) AS s FROM project_budgets WHERE project_id = ? AND approval_status != 'rejected' ${excludeId ? 'AND id != ?' : ''}`,
+    ).get(...(excludeId ? [projectId, excludeId] : [projectId])) as SqlRow
+    return Number(row.s) || 0
   },
   findById(id: string): ProjectBudget | null {
     const row = db.prepare('SELECT * FROM project_budgets WHERE id = ?').get(id) as SqlRow

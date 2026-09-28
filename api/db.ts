@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS projects (
   progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
   start_date DATETIME,
   due_date DATETIME,
+  total_budget DECIMAL(12,2),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME
 );
@@ -322,6 +323,10 @@ try {
     if (!projCols.includes('start_date')) {
       db.exec('ALTER TABLE projects ADD COLUMN start_date DATETIME')
       console.log('[db] 已添加 start_date 字段到 projects 表')
+    }
+    if (!projCols.includes('total_budget')) {
+      db.exec('ALTER TABLE projects ADD COLUMN total_budget DECIMAL(12,2)')
+      console.log('[db] 已添加 total_budget 字段到 projects 表')
     }
   } catch {
   // 迁移已执行过，忽略重复添加字段错误

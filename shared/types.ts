@@ -92,6 +92,8 @@ export interface Project {
   progress: number
   startDate: string | null
   dueDate: string | null
+  /** v1.9.4 项目总预算：非空时明细分配受硬拦截约束（null = 未启用总额控制） */
+  totalBudget?: number | null
   createdAt: string
   /** v1.9.0 结项合并：非空表示本项目已合并到目标运维项目（台账/课题记录已转绑） */
   mergedIntoProjectId?: string | null
