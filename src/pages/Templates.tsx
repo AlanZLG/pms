@@ -222,14 +222,14 @@ function TemplateFormDialog({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-xs text-muted">模板分类 <span className="text-rose-400">*</span></label>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="flex flex-wrap gap-2">
               {TEMPLATE_CATEGORIES.map((cat) => (
                 <button
                   key={cat}
                   type="button"
                   onClick={() => { setCategory(cat); setCategoryError('') }}
                   className={cn(
-                    'rounded-lg border px-2 py-2 text-xs font-medium transition',
+                    'whitespace-nowrap rounded-lg border px-2 py-2 text-xs font-medium transition',
                     category === cat
                       ? 'border-brand bg-brand/15 text-brand-soft'
                       : 'border-bg-border bg-bg-soft text-text-secondary hover:border-brand/40',

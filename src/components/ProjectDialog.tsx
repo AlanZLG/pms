@@ -124,14 +124,14 @@ export default function ProjectDialog({
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="mb-1.5 block text-xs text-muted">项目类型 <span className="text-rose-400">*</span></label>
-            <div className="grid grid-cols-6 gap-2">
+            <div className="flex flex-wrap gap-2">
               {PROJECT_TYPES.map((t) => (
                 <button
                   key={t}
                   type="button"
                   onClick={() => { setProjectType(t); setTypeError('') }}
                   className={cn(
-                    'rounded-lg border px-2 py-2 text-xs font-medium transition',
+                    'whitespace-nowrap rounded-lg border px-2 py-2 text-xs font-medium transition',
                     projectType === t
                       ? 'border-brand bg-brand/15 text-brand-soft'
                       : 'border-bg-border bg-bg-soft text-text-secondary hover:border-brand/40',
