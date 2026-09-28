@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { SYSTEM_TEMPLATE_DEFS, validateTemplateDefs } from '../api/lib/systemTemplates.ts'
 
-// 模板不变量守护（v1.9.3）：五个系统模板的内部初始设置必须始终满足结构合法性
+// 模板不变量守护（v1.9.3，v1.9.4 扩为 6 个）：系统模板的内部初始设置必须始终满足结构合法性
 // 曾发生的问题：客户支持模板缺失初始预算——本测试防止同类漂移再次发生
-describe('系统模板定义不变量（5 个模板的初始设置合理性守护）', () => {
+describe('系统模板定义不变量（6 个模板的初始设置合理性守护）', () => {
   it('不变量校验全部通过', () => {
     expect(validateTemplateDefs()).toEqual([])
   })
@@ -15,6 +15,7 @@ describe('系统模板定义不变量（5 个模板的初始设置合理性守�
       '客户支持模板',
       '咨询服务模板',
       '实施交付模板',
+      '软著申请模板',
     ])
   })
 
@@ -49,6 +50,18 @@ describe('系统模板定义不变量（5 个模板的初始设置合理性守�
       客户支持模板: '运维项目',
       咨询服务模板: '咨询项目',
       实施交付模板: '实施项目',
+      软著申请模板: '知识产权',
     })
+  })
+
+  it('软著申请模板任务描述覆盖登记资料清单关键项（v1.9.4）', () => {
+    const def = SYSTEM_TEMPLATE_DEFS.find((d) => d.name === '软著申请模板')!
+    expect(def).toBeDefined()
+    const all = def.tasks.map((t) => `${t.title} ${t.description}`).join('\n')
+    // 资料清单核心关键词：申请表、源程序（页数规则）、说明书、身份证明、权属文件、受理跟进
+    const keywords = ['申请表', '前 30 页', '后 30 页', '50 行', '说明书', '营业执照', '权属', '受理', '补正', '归档']
+    for (const k of keywords) {
+      expect(all).toContain(k)
+    }
   })
 })

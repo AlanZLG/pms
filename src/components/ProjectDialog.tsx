@@ -280,6 +280,7 @@ const typeCls: Record<ProjectType, string> = {
   实施项目: 'bg-emerald-500/15 text-emerald-500',
   产品迭代: 'bg-fuchsia-500/15 text-fuchsia-400',
   运维增强: 'bg-orange-500/15 text-orange-400',
+  知识产权: 'bg-cyan-500/15 text-cyan-400',
 }
 export function ProjectTypeBadge({ type }: { type?: ProjectType | null }) {
   if (!type) return null

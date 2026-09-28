@@ -333,7 +333,7 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(r.status).toBe(400)
   })
 
-  it('系统模板种子齐全（5 个）且分类与规模正确', async () => {
+  it('系统模板种子齐全（6 个）且分类与规模正确', async () => {
     const r = await req('GET', '/templates/project-templates', undefined, adminToken)
     expect(r.status).toBe(200)
     const templates = r.json.templates as Array<{
@@ -342,7 +342,7 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     }>
     const sys = templates.filter((t) => t.isSystem)
     expect(sys.map((t) => t.name).sort()).toEqual(
-      ['产品迭代模板', '客户支持模板', '实施交付模板', '咨询服务模板', '新规开发模板'].sort(),
+      ['产品迭代模板', '客户支持模板', '实施交付模板', '咨询服务模板', '新规开发模板', '软著申请模板'].sort(),
     )
     const byName = Object.fromEntries(sys.map((t) => [t.name, t]))
     // 模板分类与项目类型白名单同源（v1.8.6 归一化）
@@ -351,13 +351,17 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(byName['客户支持模板'].category).toBe('运维项目')
     expect(byName['咨询服务模板'].category).toBe('咨询项目')
     expect(byName['实施交付模板'].category).toBe('实施项目')
-    // 模板规模：咨询 6 任务/2 预算/4 看板列；实施 7 任务/2 预算/4 看板列
+    expect(byName['软著申请模板'].category).toBe('知识产权')
+    // 模板规模：咨询 6 任务/2 预算/4 看板列；实施 7 任务/2 预算/4 看板列；软著 8 任务/2 预算/4 看板列
     expect(byName['咨询服务模板'].taskCount).toBe(6)
     expect(byName['咨询服务模板'].budgetCount).toBe(2)
     expect(byName['咨询服务模板'].kanbanColumnCount).toBe(4)
     expect(byName['实施交付模板'].taskCount).toBe(7)
     expect(byName['实施交付模板'].budgetCount).toBe(2)
     expect(byName['实施交付模板'].kanbanColumnCount).toBe(4)
+    expect(byName['软著申请模板'].taskCount).toBe(8)
+    expect(byName['软著申请模板'].budgetCount).toBe(2)
+    expect(byName['软著申请模板'].kanbanColumnCount).toBe(4)
   })
 
   it('用系统模板建项目 → 模板任务整体复制到项目（模板×任务联动）', async () => {

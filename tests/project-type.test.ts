@@ -28,8 +28,8 @@ describe('项目类型 normalizeProjectType', () => {
     expect(normalizeProjectType(123)).toBeNull()
   })
 
-  it('常量清单恰好为六类（五类 + 运维增强）', () => {
-    expect([...PROJECT_TYPES]).toEqual(['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强'])
+  it('常量清单恰好为七类（五类 + 运维增强 + 知识产权）', () => {
+    expect([...PROJECT_TYPES]).toEqual(['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强', '知识产权'])
   })
 })
 

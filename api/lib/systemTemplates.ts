@@ -143,6 +143,27 @@ export const SYSTEM_TEMPLATE_DEFS: SystemTemplateDef[] = [
       { statusKey: 'done', label: '已完成', color: '#10B981' },
     ],
   },
+  {
+    // v1.9.4 新增：软著申报事务型流程，资料清单提示写入各任务描述，建项目后照单准备
+    name: '软著申请模板',
+    description: '适用于软件著作权登记申报，任务描述内置登记材料清单（源程序、说明书、申请表等）',
+    category: '知识产权',
+    tasks: [
+      { title: '软著信息确认', description: '确认软件全称、版本号（V1.0）、开发完成日期、首次发表日期（未发表填「未发表」）；软件名称应与产品名称一致，避免过泛或夸大用词', status: 'todo', priority: 'high', labels: ['申报'] },
+      { title: '源程序材料整理', description: '导出源程序前 30 页 + 后 30 页（每页不少于 50 行，总量不足 60 页的全部提交）；每页页眉标注「软件名称 + 版本号 + 页码」', status: 'todo', priority: 'high', labels: ['材料'] },
+      { title: '说明书文档编写', description: '用户手册 / 操作手册 / 设计说明书任选其一，同样提交前 30 页 + 后 30 页，配界面截图；页眉标注格式与源程序一致', status: 'todo', priority: 'high', labels: ['材料'] },
+      { title: '申请表填报与盖章', description: '登录中国版权保护中心官网填报《软件著作权登记申请表》，打印后加盖公章；填报信息须与源程序页眉、说明书保持一致', status: 'todo', priority: 'high', labels: ['申报'] },
+      { title: '身份与权属材料准备', description: '企业申请：营业执照副本复印件加盖公章；个人申请：身份证复印件；如属委托开发 / 合作开发，另附权属协议或合同复印件', status: 'todo', priority: 'medium', labels: ['材料'] },
+      { title: '提交与受理跟进', description: '在线提交或邮寄纸质材料，取得受理编号；跟进审查进度，一般 30-40 个工作日下证', status: 'todo', priority: 'medium', labels: ['跟进'] },
+      { title: '补正处理（如有）', description: '收到补正通知书后须在 30 日内一次性提交全部补正材料，逾期视为撤回申请', status: 'todo', priority: 'medium', labels: ['跟进'] },
+      { title: '证书归档', description: '收到证书后扫描存档，将证书号登记至课题表，原件妥善保管备查', status: 'todo', priority: 'low', labels: ['归档'] },
+    ],
+    budgets: [
+      { category: 'labor', description: '人力成本（材料整理与填报工时）' },
+      { category: 'other', description: '代理服务费（如委托代理机构；官方登记费 2017 年起免征）' },
+    ],
+    columns: DEFAULT_COLUMNS,
+  },
 ]
 
 /** 模板定义不变量校验：返回问题列表（空数组 = 全部通过） */

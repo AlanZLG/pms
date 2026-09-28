@@ -8,7 +8,7 @@ export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent'
 
 // 项目类型：v1.8.5 起新建项目时必选，v1.8.7 扩为五类（产品迭代升格为正式类型）
 // 运维项目登记运维台账，其余类型记录课题表
-export const PROJECT_TYPES = ['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强'] as const
+export const PROJECT_TYPES = ['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强', '知识产权'] as const
 export type ProjectType = (typeof PROJECT_TYPES)[number]
 
 /** 台账入口名称：运维项目/运维增强登记运维台账，其余类型记录课题表（v1.9.0 加入运维增强） */
@@ -25,7 +25,7 @@ export function normalizeProjectType(v: unknown): ProjectType | null {
 }
 
 // 模板分类（v1.8.6）：与项目类型同名（v1.8.7 起完全一致）；创建项目选择模板后预填同名项目类型
-export const TEMPLATE_CATEGORIES = ['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强'] as const
+export const TEMPLATE_CATEGORIES = ['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强', '知识产权'] as const
 export type TemplateCategory = (typeof TEMPLATE_CATEGORIES)[number]
 
 /** 模板分类 → 默认项目类型（v1.8.7 起同名一一对应） */
@@ -36,6 +36,7 @@ export const TEMPLATE_CATEGORY_DEFAULT_TYPE: Record<TemplateCategory, ProjectTyp
   实施项目: '实施项目',
   产品迭代: '产品迭代',
   运维增强: '运维增强',
+  知识产权: '知识产权',
 }
 
 /** 模板分类归一化：合法返回原名（去首尾空白），非法/空返回 null */

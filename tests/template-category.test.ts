@@ -8,7 +8,7 @@ import {
 } from '../shared/types'
 
 describe('模板分类 normalizeTemplateCategory', () => {
-  it('五个合法分类均通过并原样返回', () => {
+  it('六个合法分类均通过并原样返回', () => {
     for (const c of TEMPLATE_CATEGORIES) {
       expect(normalizeTemplateCategory(c)).toBe(c)
     }
@@ -31,18 +31,19 @@ describe('模板分类 normalizeTemplateCategory', () => {
     expect(normalizeTemplateCategory(456)).toBeNull()
   })
 
-  it('常量清单与项目类型同名（六类，v1.9.0 含运维增强）', () => {
-    expect([...TEMPLATE_CATEGORIES]).toEqual(['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强'])
+  it('常量清单与项目类型同名（七类，v1.9.0 含运维增强，v1.9.4 含知识产权）', () => {
+    expect([...TEMPLATE_CATEGORIES]).toEqual(['运维项目', '开发项目', '咨询项目', '实施项目', '产品迭代', '运维增强', '知识产权'])
   })
 })
 
 describe('模板分类 → 默认项目类型映射', () => {
-  it('五分类与项目类型同名一一对应', () => {
+  it('六分类与项目类型同名一一对应', () => {
     expect(TEMPLATE_CATEGORY_DEFAULT_TYPE['运维项目']).toBe('运维项目')
     expect(TEMPLATE_CATEGORY_DEFAULT_TYPE['开发项目']).toBe('开发项目')
     expect(TEMPLATE_CATEGORY_DEFAULT_TYPE['咨询项目']).toBe('咨询项目')
     expect(TEMPLATE_CATEGORY_DEFAULT_TYPE['实施项目']).toBe('实施项目')
     expect(TEMPLATE_CATEGORY_DEFAULT_TYPE['产品迭代']).toBe('产品迭代')
+    expect(TEMPLATE_CATEGORY_DEFAULT_TYPE['知识产权']).toBe('知识产权')
   })
 
   it('映射后的项目类型均合法（命中 PROJECT_TYPES 白名单）', () => {
