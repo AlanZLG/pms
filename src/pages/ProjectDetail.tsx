@@ -1456,6 +1456,8 @@ export default function ProjectDetail() {
               tasks={tasks}
               dependencies={dependencies}
               users={ganttUsers}
+              projectStart={project.startDate}
+              projectDue={project.dueDate}
               onTaskUpdate={handleGanttTaskUpdate}
               onAddDependency={handleAddDependency}
               onUpdateDependency={handleUpdateDependency}

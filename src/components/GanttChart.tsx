@@ -16,6 +16,9 @@ interface GanttChartProps {
   onTaskClick?: (task: Task) => void
   onCreateTask?: (data: { startDate: string; dueDate: string }) => void
   users?: { id: string; name: string }[]
+  /** 项目计划起止时间：任务完全没排期时用于回退时间轴窗口 */
+  projectStart?: string | null
+  projectDue?: string | null
 }
 
 type ZoomLevel = 'day' | 'week' | 'month'
@@ -61,6 +64,8 @@ export default function GanttChart({
   onTaskClick,
   onCreateTask,
   users = [],
+  projectStart,
+  projectDue,
 }: GanttChartProps) {
   const [zoom, setZoom] = useState<ZoomLevel>('day')
   const [dragging, setDragging] = useState<{ taskId: string; type: 'move' | 'resize-left' | 'resize-right' | 'progress'; startX: number; startDate: string; dueDate: string; currentStartDate: string; currentDueDate: string; progress?: number; currentProgress?: number } | null>(null)
@@ -124,6 +129,12 @@ export default function GanttChart({
       t.actualEndDate ? new Date(t.actualEndDate) : null,
     ]).filter(Boolean) as Date[]
 
+    // 任务完全没排期时，回退到项目计划的起止时间，保证甘特图仍有合理的时间窗口
+    if (dates.length === 0 && (projectStart || projectDue)) {
+      if (projectStart) dates.push(new Date(projectStart))
+      if (projectDue) dates.push(new Date(projectDue))
+    }
+
     if (dates.length === 0) {
       const today = new Date()
       return {
@@ -141,7 +152,7 @@ export default function GanttChart({
 
     // 闭区间：首尾两天都计入轴长，否则末尾日期会被裁掉一格
     return { minDate: min, maxDate: max, totalDays: dayOffset(min, max) + 1 }
-  }, [tasks])
+  }, [tasks, projectStart, projectDue])
 
   // Auto-scroll to put today at the leftmost position
   useEffect(() => {
@@ -605,7 +616,8 @@ export default function GanttChart({
   const gridLines = useMemo(() => {
     const lines: { x: number; label: string; isToday: boolean; isWeekend: boolean; weekNum?: number }[] = []
     const today = new Date()
-    for (let i = 0; i <= totalDays; i++) {
+    // totalDays 已是闭区间天数，这里严格渲染 totalDays 格，避免多出一天
+    for (let i = 0; i < totalDays; i++) {
       const date = addDays(minDate, i)
       const x = i * dayWidth
       let label = ''
@@ -639,7 +651,7 @@ export default function GanttChart({
     const quarters: { label: string; width: number }[] = []
     let currentQuarter = getQuarter(minDate)
     let currentWidth = 0
-    for (let i = 0; i <= totalDays; i++) {
+    for (let i = 0; i < totalDays; i++) {
       const date = addDays(minDate, i)
       const q = getQuarter(date)
       if (q !== currentQuarter) {
@@ -662,7 +674,7 @@ export default function GanttChart({
     let currentYear = minDate.getFullYear()
     let currentWidth = 0
 
-    for (let i = 0; i <= totalDays; i++) {
+    for (let i = 0; i < totalDays; i++) {
       const date = addDays(minDate, i)
       if (date.getMonth() !== currentMonth || date.getFullYear() !== currentYear) {
         months.push({ label: `${currentYear}年${currentMonth + 1}月`, width: currentWidth })
