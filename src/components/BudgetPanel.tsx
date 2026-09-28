@@ -314,21 +314,21 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
                         {b.approvalStatus !== 'approved' && !isFinance ? '***' : b.amount.toLocaleString()}
                       </span>
                       {canEditBudget(b) && (
-                        <button onClick={() => openBudgetEdit(b)} className="p-1 text-muted hover:text-text-primary">
+                        <button onClick={() => openBudgetEdit(b)} aria-label="编辑预算" className="p-1 text-muted hover:text-text-primary">
                           <Edit2 className="h-3 w-3" />
                         </button>
                       )}
                       {canDeleteBudget(b) && (
-                        <button onClick={() => handleDeleteBudget(b.id)} className="p-1 text-muted hover:text-danger">
+                        <button onClick={() => handleDeleteBudget(b.id)} aria-label="删除预算" className="p-1 text-muted hover:text-danger">
                           <Trash2 className="h-3 w-3" />
                         </button>
                       )}
                       {isFinance && b.approvalStatus === 'pending' && (
                         <>
-                          <button onClick={() => openApproveModal(b, 'approve')} className="p-1 text-success hover:bg-success/10 rounded">
+                          <button onClick={() => openApproveModal(b, 'approve')} aria-label="通过审批" className="p-1 text-success hover:bg-success/10 rounded">
                             <Check className="h-3 w-3" />
                           </button>
-                          <button onClick={() => openApproveModal(b, 'reject')} className="p-1 text-danger hover:bg-danger/10 rounded">
+                          <button onClick={() => openApproveModal(b, 'reject')} aria-label="驳回审批" className="p-1 text-danger hover:bg-danger/10 rounded">
                             <XCircle className="h-3 w-3" />
                           </button>
                         </>
