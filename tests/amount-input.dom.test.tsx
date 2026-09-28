@@ -47,13 +47,16 @@ describe('parseAmountText 金额文本解析', () => {
 describe('AmountInput 组件交互', () => {
   afterEach(cleanup)
 
-  it('失焦显示千分位，聚焦切换为裸数字便于编辑', async () => {
+  it('失焦显示千分位，聚焦选中文本便于整体替换', async () => {
     const user = userEvent.setup()
     render(<AmountInput value={150000} onChange={() => {}} />)
     const input = screen.getByRole('textbox') as HTMLInputElement
     expect(input.value).toBe('150,000')
     await user.click(input)
-    expect(input.value).toBe('150000')
+    // 聚焦保持千分位展示 + 全选（键入即整体替换）
+    expect(input.value).toBe('150,000')
+    expect(input.selectionStart).toBe(0)
+    expect(input.selectionEnd).toBe(input.value.length)
   })
 
   it('键入「3.5万」onChange 收到换算后的 35000', async () => {
@@ -109,5 +112,55 @@ describe('AmountInput 组件交互', () => {
     render(<AmountInput value={0} onChange={onChange} />)
     await user.type(screen.getByRole('textbox'), '123.45')
     expect(onChange).toHaveBeenLastCalledWith(123.45)
+  })
+})
+
+describe('AmountInput 交互增强（全选/上限/Enter）', () => {
+  afterEach(cleanup)
+
+  it('聚焦自动全选：直接键入替换旧值，无需手动清除', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<AmountInput value={1000} onChange={onChange} />)
+    await user.type(screen.getByRole('textbox'), '55')
+    expect(onChange).toHaveBeenLastCalledWith(55)
+  })
+
+  it('回车触发 onEnter 快捷提交', async () => {
+    const onEnter = vi.fn()
+    const user = userEvent.setup()
+    render(<AmountInput value={100} onChange={() => {}} onEnter={onEnter} />)
+    await user.type(screen.getByRole('textbox'), '{Enter}')
+    expect(onEnter).toHaveBeenCalledTimes(1)
+  })
+
+  it('超出 max 时红框警示（aria-invalid + 提示文案）', () => {
+    render(<AmountInput value={1500} onChange={() => {}} max={1000} />)
+    const input = screen.getByRole('textbox')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText('超出上限 ¥1,000')).toBeTruthy()
+  })
+
+  it('有 max 时步进/快捷按钮自动截断到上限', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<AmountInput value={900} onChange={onChange} max={1000} />)
+    await user.click(screen.getByRole('button', { name: '+5万' }))
+    expect(onChange).toHaveBeenLastCalledWith(1000)
+  })
+
+  it('键入格式无效时红框提示（不阻塞键入，失焦回退）', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<AmountInput value={100} onChange={onChange} />)
+    await user.type(screen.getByRole('textbox'), 'abc')
+    expect(screen.getByText(/金额格式无效/)).toBeTruthy()
+    expect(screen.getByRole('textbox').getAttribute('aria-invalid')).toBe('true')
+  })
+
+  it('未传 max 时不出现超限提示', () => {
+    render(<AmountInput value={999999} onChange={() => {}} />)
+    expect(screen.queryByText(/超出上限/)).toBeNull()
+    expect(screen.getByRole('textbox').getAttribute('aria-invalid')).toBe('false')
   })
 })

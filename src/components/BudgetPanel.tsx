@@ -399,7 +399,12 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
             <div className="mt-4 space-y-3">
               <div>
                 <label className="mb-1.5 block text-xs text-muted">总预算金额</label>
-                  <AmountInput value={totalForm} onChange={setTotalForm} placeholder="支持 3.5万" />
+                  <AmountInput
+                    value={totalForm}
+                    onChange={setTotalForm}
+                    onEnter={handleSaveTotalBudget}
+                    placeholder="支持 3.5万"
+                  />
                 </div>
               <p className="text-xs text-muted">
                 各分类明细分配（待审批 + 已审批）合计不能超过总预算；已分配 ¥{allocated.toLocaleString()}，不能设置低于该额度
@@ -436,7 +441,13 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted">预算金额</label>
-                  <AmountInput value={form.amount} onChange={(v) => setForm({ ...form, amount: v })} placeholder="支持 3.5万" />
+                  <AmountInput
+                    value={form.amount}
+                    onChange={(v) => setForm({ ...form, amount: v })}
+                    max={!editingBudget && totalBudgetLimit != null ? Math.max(totalBudgetLimit - allocated, 0) : undefined}
+                    onEnter={handleSaveBudget}
+                    placeholder="支持 3.5万"
+                  />
                 </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted">备注说明</label>
@@ -505,7 +516,12 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
               </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted">支出金额</label>
-                  <AmountInput value={expenseForm.amount} onChange={(v) => setExpenseForm({ ...expenseForm, amount: v })} placeholder="支持 3.5万" />
+                  <AmountInput
+                    value={expenseForm.amount}
+                    onChange={(v) => setExpenseForm({ ...expenseForm, amount: v })}
+                    onEnter={handleSaveExpense}
+                    placeholder="支持 3.5万"
+                  />
                 </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted">支出日期</label>
