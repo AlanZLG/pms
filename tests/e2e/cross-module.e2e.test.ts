@@ -777,4 +777,52 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(restore.status).toBe(200)
     expect((restore.json.project as { totalBudget: number | null }).totalBudget).toBeNull()
   })
+
+  it('预算类别唯一与支出下限：重复创建 400 / 已审批追加→重置待审批 / 低于支出 400 / 有支出不可删除', async () => {
+    // 规则一：hardware 已有预算行 → 同类别再建 400（追加须走原行）
+    const dup = await req('POST', `/projects/${projectId}/budgets`, {
+      category: 'hardware', amount: 500, description: 'E2E 重复类别',
+    }, adminToken)
+    expect(dup.status).toBe(400)
+    expect(String((dup.json as { error?: string }).error)).toContain('已有预算')
+
+    // 建 labor 预算并登记该类别实际支出
+    const labor = await req('POST', `/projects/${projectId}/budgets`, {
+      category: 'labor', amount: 6000, description: 'E2E 人力预算',
+    }, adminToken)
+    expect(labor.status).toBe(201)
+    const laborId = (labor.json.budget as { id: string }).id
+    const expense = await req('POST', `/projects/${projectId}/expenses`, {
+      category: 'labor', amount: 2000, description: 'E2E 已发生支出', date: '2026-09-25',
+    }, adminToken)
+    expect(expense.status).toBe(201)
+
+    // 规则三：调减到 1500（低于支出 2000）→ 400；调减到 2000（等于支出）→ 200
+    const under = await req('PATCH', `/budgets/${laborId}`, { amount: 1500 }, adminToken)
+    expect(under.status).toBe(400)
+    expect(String((under.json as { error?: string }).error)).toContain('不能低于实际支出')
+    const floor = await req('PATCH', `/budgets/${laborId}`, { amount: 2000 }, adminToken)
+    expect(floor.status).toBe(200)
+
+    // 规则三：有支出的类别预算不可删除（支出将失去归属），只能调减
+    const del = await req('DELETE', `/budgets/${laborId}`, undefined, adminToken)
+    expect(del.status).toBe(400)
+    expect(String((del.json as { error?: string }).error)).toContain('不能删除预算')
+
+    // 规则二（追加）：已审批 hardware 1200 → PATCH 1500 → 200，状态重置 pending 重新审批
+    const budgets = await req('GET', `/projects/${projectId}/budgets`, undefined, adminToken)
+    const hw = (budgets.json.budgets as Array<{ id: string; category: string; approvalStatus: string }>)
+      .find((b) => b.category === 'hardware')!
+    expect(hw.approvalStatus).toBe('approved')
+    const appended = await req('PATCH', `/budgets/${hw.id}`, { amount: 1500 }, adminToken)
+    expect(appended.status).toBe(200)
+    expect((appended.json.budget as { approvalStatus: string }).approvalStatus).toBe('pending')
+    const reApproved = await req('POST', `/budgets/${hw.id}/approve`, { comment: '追加后重新审批' }, adminToken)
+    expect(reApproved.status).toBe(200)
+
+    // 守卫补充：重新审批通过（approved）的行同样不可删除
+    const delApproved = await req('DELETE', `/budgets/${hw.id}`, undefined, adminToken)
+    expect(delApproved.status).toBe(400)
+    expect(String((delApproved.json as { error?: string }).error)).toContain('已审批的预算无法删除')
+  })
 })

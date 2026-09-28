@@ -21,15 +21,17 @@ const QUICK_AMOUNTS = [
 /**
  * 金额快速输入：
  * - 聚焦全选直接替换输入 / 失焦千分位展示；键盘输入精确到元，支持「3.5万」单位
- * - ↑/↓ 键按 100 步进（有 max 时自动截断）；+1千/+1万/+5万 点击累加，清零一键归零
- * - 传 max 时超出显示红框警示（步进/快捷按钮截断到上限，键入不拦截由提交校验兜底）
+ * - ↑/↓ 键按 100 步进（自动截断到 [min, max]）；+1千/+1万/+5万 点击累加，清零一键归零
+ * - 传 max 时超出显示红框警示；传 min 时低于显示红框警示（步进/快捷按钮截断到下限）
  * - 键入格式无效时红框提示，失焦自动回退上一有效值；onEnter 支持回车快捷提交
  */
-export default function AmountInput({ value, onChange, max, onEnter, placeholder = '0' }: {
+export default function AmountInput({ value, onChange, max, min, onEnter, placeholder = '0' }: {
   value: number
   onChange: (v: number) => void
   /** 上限金额（如总预算剩余可分配额度）：超出红框警示，步进/快捷按钮自动截断 */
   max?: number
+  /** 下限金额（如该类别已发生支出）：低于红框警示，步进/快捷按钮自动抬到下限 */
+  min?: number
   /** 回车快捷提交（modal 表单场景） */
   onEnter?: () => void
   placeholder?: string
@@ -39,10 +41,12 @@ export default function AmountInput({ value, onChange, max, onEnter, placeholder
   const display = focused ? text : (value ? value.toLocaleString() : '')
   const invalid = focused && text !== '' && parseAmountText(text) === null
   const overMax = max != null && value > max
-  const error = invalid || overMax
+  const underMin = min != null && value < min - 1e-9
+  const error = invalid || overMax || underMin
   const apply = (v: number) => {
     let next = Math.max(Math.round(v * 100) / 100, 0)
     if (max != null) next = Math.min(next, max)
+    if (min != null) next = Math.max(next, min)
     onChange(next)
     setText(String(next))
   }
@@ -74,7 +78,8 @@ export default function AmountInput({ value, onChange, max, onEnter, placeholder
         }}
       />
       {invalid && <p className="mt-1 text-xs text-danger">金额格式无效，支持数字或「3.5万」写法</p>}
-      {overMax && <p className="mt-1 text-xs text-danger">超出上限 ¥{max.toLocaleString()}</p>}
+      {overMax && <p className="mt-1 text-xs text-danger">超出上限 ¥{max!.toLocaleString()}</p>}
+      {underMin && <p className="mt-1 text-xs text-danger">低于已发生支出 ¥{min!.toLocaleString()}</p>}
       <div className="mt-1.5 flex flex-wrap gap-1.5">
         {QUICK_AMOUNTS.map((q) => (
           <button

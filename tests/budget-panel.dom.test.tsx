@@ -83,14 +83,15 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('预算面板全链路（金额输入 E2E）', () => {
-  it('新建预算：键入「3.5万」→ 创建预算 → createBudget 收到 35000 且弹窗关闭', async () => {
+  it('新建预算：默认选中首个未被占用的类别，键入「3.5万」→ createBudget 收到 35000 且弹窗关闭', async () => {
     const user = userEvent.setup()
     apiMocks.createBudget.mockResolvedValue({ budget: makeBudget({ amount: 35000, description: 'UI 设计外包', category: 'outsource' }) })
     render(<BudgetPanel projectId={PROJECT_ID} />)
 
     await user.click(await screen.findByRole('button', { name: '添加预算' }))
-    // 切换分类到「外包费用」
-    await user.selectOptions(screen.getByDisplayValue('内部人力'), 'outsource')
+    // labor 已有预算行（类别唯一），下拉默认选中第一个可用类别「外包费用」，且不含「内部人力」
+    expect(screen.getByDisplayValue('外包费用')).toBeTruthy()
+    expect(screen.queryByRole('option', { name: '内部人力' })).toBeNull()
     const amountInput = screen.getByPlaceholderText('支持 3.5万')
     await user.type(amountInput, '3.5万')
     await user.type(screen.getByPlaceholderText('请输入备注说明'), 'UI 设计外包')
@@ -144,7 +145,7 @@ describe('预算面板全链路（金额输入 E2E）', () => {
     // 聚焦全选后直接键入即整体替换（无需手动清除旧值）
     await user.type(amountInput, '3万')
     expect(apiMocks.updateBudget).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '保存修改' }))
+    await user.click(screen.getByRole('button', { name: '保存追加' }))
 
     await waitFor(() => {
       expect(apiMocks.updateBudget).toHaveBeenCalledWith('b2', {
@@ -155,5 +156,43 @@ describe('预算面板全链路（金额输入 E2E）', () => {
     })
     // 编辑已有预算不受总额 max 红框约束（排除自身占用，由后端校验）
     expect(screen.queryByText(/超出上限/)).toBeNull()
+  })
+
+  it('类别唯一：全部类别已建立预算时，新建弹窗不再展示表单而是提示在原行上追加', async () => {
+    const user = userEvent.setup()
+    apiMocks.listBudgets.mockResolvedValue({
+      budgets: ['labor', 'outsource', 'hardware', 'software', 'other'].map((c, i) =>
+        makeBudget({ id: `b${i}`, category: c as ProjectBudget['category'], amount: 1000 + i })),
+    })
+    render(<BudgetPanel projectId={PROJECT_ID} />)
+
+    await user.click(await screen.findByRole('button', { name: '添加预算' }))
+    expect(screen.getByText(/各费用类别均已建立预算/)).toBeTruthy()
+    expect(screen.queryByPlaceholderText('支持 3.5万')).toBeNull()
+    expect(screen.queryByRole('button', { name: '创建预算' })).toBeNull()
+  })
+
+  it('支出下限联动：该类别已发生支出时，低于支出的金额出现红框提示', async () => {
+    const user = userEvent.setup()
+    const pendingBudget = makeBudget({ id: 'b2', approvalStatus: 'pending', amount: 20000, category: 'outsource' })
+    apiMocks.listBudgets.mockResolvedValue({ budgets: [pendingBudget] })
+    apiMocks.listExpenses.mockResolvedValue({
+      expenses: [{ id: 'e1', projectId: PROJECT_ID, budgetId: 'b2', category: 'outsource', amount: 8000, description: '已花', date: '2026-09-20', createdBy: 'u-finance', createdAt: '2026-09-20 10:00:00' }],
+    })
+    render(<BudgetPanel projectId={PROJECT_ID} />)
+
+    await user.click(await screen.findByRole('button', { name: '编辑预算' }))
+    expect(screen.getByText(/原金额 ¥20,000/)).toBeTruthy()
+    const amountInput = screen.getByPlaceholderText('支持 3.5万')
+    // 全选替换为 3000（低于已发生支出 8000）→ 红框提示
+    await user.type(amountInput, '3000')
+    expect(screen.getByText('低于已发生支出 ¥8,000')).toBeTruthy()
+    // 点 +1万 累加到 13,000（高于支出）→ 红框消失
+    await user.click(screen.getByRole('button', { name: '+1万' }))
+    expect(screen.queryByText('低于已发生支出 ¥8,000')).toBeNull()
+    await user.click(screen.getByRole('button', { name: '保存追加' }))
+    await waitFor(() => {
+      expect(apiMocks.updateBudget).toHaveBeenCalledWith('b2', { category: 'outsource', amount: 13000, description: '内部人力' })
+    })
   })
 })

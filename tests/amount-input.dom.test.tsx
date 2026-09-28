@@ -163,4 +163,19 @@ describe('AmountInput 交互增强（全选/上限/Enter）', () => {
     expect(screen.queryByText(/超出上限/)).toBeNull()
     expect(screen.getByRole('textbox').getAttribute('aria-invalid')).toBe('false')
   })
+
+  it('低于 min 时红框警示（已发生支出下限）', () => {
+    render(<AmountInput value={3000} onChange={() => {}} min={8000} />)
+    const input = screen.getByRole('textbox')
+    expect(input.getAttribute('aria-invalid')).toBe('true')
+    expect(screen.getByText('低于已发生支出 ¥8,000')).toBeTruthy()
+  })
+
+  it('有 min 时步进/快捷按钮自动抬到下限（清零也不例外）', async () => {
+    const onChange = vi.fn()
+    const user = userEvent.setup()
+    render(<AmountInput value={9000} onChange={onChange} min={8000} />)
+    await user.click(screen.getByRole('button', { name: '清零' }))
+    expect(onChange).toHaveBeenLastCalledWith(8000)
+  })
 })

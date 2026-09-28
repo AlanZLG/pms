@@ -1137,6 +1137,19 @@ export const budgetRepo = {
     const row = db.prepare('SELECT * FROM project_budgets WHERE id = ?').get(id) as SqlRow
     return row ? rowToBudget(row) : null
   },
+  /** 同项目同类别（非 rejected）的现存预算行：v1.9.5 类别唯一性校验用 */
+  findByCategory(projectId: string, category: BudgetCategory, excludeId?: string): ProjectBudget | null {
+    const row = db.prepare(
+      `SELECT * FROM project_budgets WHERE project_id = ? AND category = ? AND approval_status != 'rejected' ${excludeId ? 'AND id != ?' : ''} LIMIT 1`,
+    ).get(...(excludeId ? [projectId, category, excludeId] : [projectId, category])) as SqlRow
+    return row ? rowToBudget(row) : null
+  },
+  /** 已审批预算追加金额后重置为待审批（增量需重新审批） */
+  resetToPending(id: string): void {
+    db.prepare(
+      'UPDATE project_budgets SET approval_status = ?, approved_by = NULL, approved_at = NULL, approval_comment = NULL WHERE id = ?',
+    ).run('pending', id)
+  },
   findPending(projectId?: string): ProjectBudget[] {
     const where = projectId ? 'WHERE project_id = ?' : ''
     const and = projectId ? ' AND' : 'WHERE'
@@ -1186,6 +1199,13 @@ export const expenseRepo = {
   findByProject(projectId: string): ProjectExpense[] {
     const rows = db.prepare('SELECT * FROM project_expenses WHERE project_id = ? ORDER BY date DESC, created_at DESC').all(projectId) as SqlRow[]
     return rows.map(rowToExpense)
+  },
+  /** 项目内某类别的已发生支出合计（按类别口径，不依赖 budget_id，与成本分类统计一致） */
+  sumByCategory(projectId: string, category: BudgetCategory): number {
+    const row = db.prepare(
+      'SELECT COALESCE(SUM(amount), 0) AS s FROM project_expenses WHERE project_id = ? AND category = ?',
+    ).get(projectId, category) as SqlRow
+    return Number(row.s) || 0
   },
   findById(id: string): ProjectExpense | null {
     const row = db.prepare('SELECT * FROM project_expenses WHERE id = ?').get(id) as SqlRow

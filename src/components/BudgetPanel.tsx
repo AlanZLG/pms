@@ -64,6 +64,13 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
   const totalExpense = expenses.data?.reduce((sum, e) => sum + e.amount, 0) || 0
   const remaining = totalBudgetLimit != null ? totalBudgetLimit - allocated : totalBudget - totalExpense
 
+  // v1.9.5 类别唯一：已被（非拒绝）预算占用的类别不允许再新建，追加一律走原行编辑
+  const availableCategories = (Object.keys(categoryLabels) as BudgetCategory[])
+    .filter(c => !(budgets.data || []).some(b => b.category === c && b.approvalStatus !== 'rejected'))
+  /** 该类别已发生支出合计（预算金额下限） */
+  const spentByCategory = (category: BudgetCategory) =>
+    (expenses.data || []).filter(e => e.category === category).reduce((s, e) => s + e.amount, 0)
+
   const [form, setForm] = useState({
     category: 'labor' as BudgetCategory,
     amount: 0,
@@ -144,6 +151,13 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
     }
   }
 
+  const openBudgetCreate = () => {
+    setEditingBudget(null)
+    // 默认选中第一个未被占用的类别；全部占用时打开弹窗展示追加引导
+    setForm({ category: availableCategories[0] ?? 'labor', amount: 0, description: '' })
+    setShowBudgetModal(true)
+  }
+
   const openBudgetEdit = (budget: ProjectBudget) => {
     setEditingBudget(budget)
     setForm({
@@ -187,7 +201,7 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
   }
 
   const canEditBudget = (budget: ProjectBudget) => {
-    if (budget.approvalStatus === 'approved') return false
+    // 已审批预算也可编辑（追加金额），保存后重置为待审批重新审批
     if (isFinance) return true
     return budget.createdBy === user?.id
   }
@@ -259,7 +273,7 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
         <Card className="p-5">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="font-display text-lg text-text-primary">预算分配</h3>
-            <Button size="sm" onClick={() => setShowBudgetModal(true)}>
+            <Button size="sm" onClick={openBudgetCreate}>
               <Plus className="h-4 w-4 mr-1" /> 添加预算
             </Button>
           </div>
@@ -314,7 +328,7 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
                         {b.approvalStatus !== 'approved' && !isFinance ? '***' : b.amount.toLocaleString()}
                       </span>
                       {canEditBudget(b) && (
-                        <button onClick={() => openBudgetEdit(b)} aria-label="编辑预算" className="p-1 text-muted hover:text-text-primary">
+                        <button onClick={() => openBudgetEdit(b)} aria-label="编辑预算" title="追加/编辑金额" className="p-1 text-muted hover:text-text-primary">
                           <Edit2 className="h-3 w-3" />
                         </button>
                       )}
@@ -421,11 +435,17 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl max-h-[85vh] overflow-y-auto max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between">
-              <h3 className="font-display text-lg text-text-primary">{editingBudget ? '编辑预算' : '添加预算'}</h3>
+              <h3 className="font-display text-lg text-text-primary">{editingBudget ? '追加/编辑预算' : '添加预算'}</h3>
               <button onClick={() => setShowBudgetModal(false)} className="p-1 text-muted hover:text-text-primary">
                 <X className="h-4 w-4" />
               </button>
             </div>
+            {!editingBudget && availableCategories.length === 0 ? (
+              <div className="mt-4 rounded-lg bg-warn/10 p-4 text-sm text-warn">
+                各费用类别均已建立预算。请在预算列表中点击对应行的编辑按钮，在原有金额上追加。
+              </div>
+            ) : (
+            <>
             <div className="mt-4 space-y-4">
               <div>
                 <label className="mb-1.5 block text-xs text-muted">预算分类</label>
@@ -434,8 +454,8 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
                   onChange={(e) => setForm({ ...form, category: e.target.value as BudgetCategory })}
                   className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand"
                 >
-                  {Object.entries(categoryLabels).map(([key, label]) => (
-                    <option key={key} value={key}>{label}</option>
+                  {(editingBudget ? (Object.keys(categoryLabels) as BudgetCategory[]) : availableCategories).map((key) => (
+                    <option key={key} value={key}>{categoryLabels[key]}</option>
                   ))}
                 </select>
               </div>
@@ -445,9 +465,15 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
                     value={form.amount}
                     onChange={(v) => setForm({ ...form, amount: v })}
                     max={!editingBudget && totalBudgetLimit != null ? Math.max(totalBudgetLimit - allocated, 0) : undefined}
+                    min={spentByCategory(form.category) > 0 ? spentByCategory(form.category) : undefined}
                     onEnter={handleSaveBudget}
                     placeholder="支持 3.5万"
                   />
+                  {editingBudget && (
+                    <p className="mt-1 text-xs text-muted">
+                      原金额 ¥{editingBudget.amount.toLocaleString()}，在原金额上追加可直接点 +1千/+1万；已审批预算追加后将重新进入审批
+                    </p>
+                  )}
                 </div>
               <div>
                 <label className="mb-1.5 block text-xs text-muted">备注说明</label>
@@ -470,9 +496,11 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
             </div>
             <div className="mt-6">
               <Button onClick={handleSaveBudget} className="w-full">
-                {editingBudget ? '保存修改' : '创建预算'}
+                {editingBudget ? '保存追加' : '创建预算'}
               </Button>
             </div>
+            </>
+            )}
           </div>
         </div>
       )}
