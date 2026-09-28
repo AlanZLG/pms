@@ -22,7 +22,7 @@ import { StatSkeleton, CardSkeleton, Skeleton } from '@/components/Skeleton'
 import { useAppStore } from '@/stores/app'
 import { dueLabel } from '@/lib/date'
 import { cn } from '@/lib/utils'
-import type { Task, StatsOverview, BurndownData, Project } from '../../shared/types'
+import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject } from '../../shared/types'
 import { STATUS_COLORS_HEX, PROJECT_STATUS_META } from '@/lib/constants'
 import { useMemo, useState } from 'react'
 
@@ -33,6 +33,20 @@ const STAT_CARD_TONES: Record<string, string> = {
   sky: 'from-sky-500/20 to-sky-500/5 text-sky-300',
   ok: 'from-emerald-500/20 to-emerald-500/5 text-ok',
   warn: 'from-amber-500/20 to-amber-500/5 text-warn',
+}
+
+const BUDGET_CATEGORY_LABELS: Record<string, string> = {
+  labor: '内部人力',
+  outsource: '外包费用',
+  hardware: '硬件设备',
+  software: '软件服务',
+  other: '其他',
+}
+
+const APPROVAL_LABELS: Record<string, string> = {
+  pending: '待审批',
+  approved: '已审批',
+  rejected: '已拒绝',
 }
 
 export default function Dashboard() {
@@ -71,7 +85,11 @@ const tasks = useSwr<{ mine: Task[]; overdue: OverdueTask[] }>(userId ? `tasks:u
     .map((t) => ({ ...t, projectName: nameById.get(t.projectId) || '' }))
   return { mine, overdue }
 })
-const [todoTab, setTodoTab] = useState<'mine' | 'overdue'>('mine')
+const [todoTab, setTodoTab] = useState<'mine' | 'overdue' | 'budget'>('mine')
+const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, async () => {
+  const { budgets } = await api.myBudgets()
+  return budgets
+})
 
   const trend = overview.data?.trend || []
   const totalTasks =
@@ -306,9 +324,19 @@ const [todoTab, setTodoTab] = useState<'mine' | 'overdue'>('mine')
             >
               负责项目逾期 {tasks.data ? `(${tasks.data.overdue.length})` : ''}
             </button>
+            <button
+              type="button"
+              onClick={() => setTodoTab('budget')}
+              className={cn(
+                'rounded-md px-2.5 py-1 transition',
+                todoTab === 'budget' ? 'bg-bg-card text-text-primary shadow-sm' : 'text-muted hover:text-text-secondary',
+              )}
+            >
+              我的预算 {myBudgets.data ? `(${myBudgets.data.length})` : ''}
+            </button>
           </div>
         </div>
-        {tasks.loading ? (
+        {(todoTab === 'budget' ? myBudgets.loading : tasks.loading) ? (
           <div className="space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
               <UiSkeleton key={i} className="h-14" />
@@ -316,6 +344,45 @@ const [todoTab, setTodoTab] = useState<'mine' | 'overdue'>('mine')
           </div>
         ) : (
           (() => {
+            if (todoTab === 'budget') {
+              const list = myBudgets.data ?? []
+              if (list.length === 0) {
+                return <EmptyState title="暂无预算申请" hint="在项目详情的预算面板提交" />
+              }
+              return (
+                <ul className="divide-y divide-bg-border">
+                  {list.slice(0, 8).map((b) => (
+                    <Link
+                      key={b.id}
+                      to={`/projects/${b.projectId}`}
+                      className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
+                    >
+                      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', b.approvalStatus === 'rejected' ? 'bg-danger' : b.approvalStatus === 'pending' ? 'bg-warn' : 'bg-ok')} />
+                      <span className="max-w-28 shrink-0 truncate rounded bg-bg-soft px-1.5 py-0.5 text-xs text-muted">
+                        {b.projectName}
+                      </span>
+                      <span className="flex-1 truncate text-sm text-text-primary">
+                        {BUDGET_CATEGORY_LABELS[b.category] || b.category}
+                        {b.description ? ` · ${b.description}` : ''}
+                      </span>
+                      <span className="shrink-0 font-mono text-xs text-text-secondary">
+                        ¥{b.amount.toLocaleString()}
+                      </span>
+                      <span
+                        className={cn(
+                          'shrink-0 text-xs',
+                          b.approvalStatus === 'pending' && 'text-warn',
+                          b.approvalStatus === 'approved' && 'text-ok',
+                          b.approvalStatus === 'rejected' && 'text-danger',
+                        )}
+                      >
+                        {APPROVAL_LABELS[b.approvalStatus] || b.approvalStatus}
+                      </span>
+                    </Link>
+                  ))}
+                </ul>
+              )
+            }
             const list = todoTab === 'mine' ? tasks.data?.mine ?? [] : tasks.data?.overdue ?? []
             if (list.length === 0) {
               return todoTab === 'mine' ? (

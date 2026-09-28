@@ -703,4 +703,37 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     await req('PATCH', `/team/${memberId}/cost`, { categoryId: null }, adminToken)
     await req('DELETE', `/team/categories/${catId}`, undefined, adminToken)
   })
+
+  it('我的预算申请：创建人可见审批状态与项目名，他人列表不含，审批后状态同步', async () => {
+    // admin 在自己的项目创建预算 → mine 可见且带项目名，初始 pending
+    const created = await req('POST', `/projects/${projectId}/budgets`, {
+      category: 'hardware',
+      amount: 1200,
+      description: 'E2E 我的预算申请',
+    }, adminToken)
+    expect(created.status).toBe(201)
+    const budgetId = (created.json.budget as { id: string }).id
+
+    const mine = await req('GET', '/budgets/mine', undefined, adminToken)
+    expect(mine.status).toBe(200)
+    const mineList = mine.json.budgets as Array<{ id: string; projectName: string; approvalStatus: string; amount: number }>
+    const target = mineList.find((b) => b.id === budgetId)
+    expect(target).toBeTruthy()
+    expect(target!.projectName).toBe('E2E集成项目')
+    expect(target!.approvalStatus).toBe('pending')
+    expect(target!.amount).toBe(1200)
+
+    // 非创建人（member）的 mine 不包含该预算
+    const memberMine = await req('GET', '/budgets/mine', undefined, memberToken)
+    expect(memberMine.status).toBe(200)
+    const memberList = memberMine.json.budgets as Array<{ id: string }>
+    expect(memberList.some((b) => b.id === budgetId)).toBe(false)
+
+    // 审批通过后，创建人的 mine 状态同步为 approved
+    const approved = await req('POST', `/budgets/${budgetId}/approve`, { comment: 'E2E 通过' }, adminToken)
+    expect(approved.status).toBe(200)
+    const after = await req('GET', '/budgets/mine', undefined, adminToken)
+    const afterTarget = (after.json.budgets as Array<{ id: string; approvalStatus: string }>).find((b) => b.id === budgetId)
+    expect(afterTarget?.approvalStatus).toBe('approved')
+  })
 })

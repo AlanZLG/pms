@@ -1135,6 +1135,10 @@ export const budgetRepo = {
     const rows = db.prepare(`SELECT * FROM project_budgets ${where} ${and} approval_status = 'pending' ORDER BY created_at DESC`).all(...params) as SqlRow[]
     return rows.map(rowToBudget)
   },
+  findByCreator(userId: string): ProjectBudget[] {
+    const rows = db.prepare('SELECT * FROM project_budgets WHERE created_by = ? ORDER BY created_at DESC').all(userId) as SqlRow[]
+    return rows.map(rowToBudget)
+  },
   create(data: { projectId: string; category: BudgetCategory; amount: number; currency?: string; description?: string; createdBy: string }): ProjectBudget {
     const id = genId()
     db.prepare(

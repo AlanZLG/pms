@@ -3,7 +3,7 @@
 import type {
   User, Project, Task, Comment, Subtask, AuthResponse, Notification,
   StatsOverview, BurndownData, WorkloadItem, Template, Attachment,
-  TaskHours, ProjectBudget, ProjectExpense, BudgetCategory,
+  TaskHours, ProjectBudget, ProjectExpense, BudgetCategory, BudgetWithProject,
   HoursByUserProject, ProjectCostSummary, UserCategory, TaskDependency, TaskHistory,
   SavedFilter, TaskFilter, SearchResult, KanbanColumn, KanbanColumnInput,
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
@@ -369,6 +369,8 @@ export const api = {
     request<{ budget: ProjectBudget }>(`/api/budgets/${budgetId}/reject`, { method: 'POST', body: JSON.stringify(data) }),
   listPendingBudgets: () =>
     request<{ budgets: ProjectBudget[] }>('/api/budgets/pending'),
+  myBudgets: () =>
+    request<{ budgets: BudgetWithProject[] }>('/api/budgets/mine'),
 
   // expenses
   listExpenses: (projectId: string) =>

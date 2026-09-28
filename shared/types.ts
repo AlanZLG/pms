@@ -254,6 +254,10 @@ export interface ProjectBudget {
   approvalComment?: string | null
 }
 
+export interface BudgetWithProject extends ProjectBudget {
+  projectName: string
+}
+
 export interface BudgetApproval {
   id: string
   budgetId: string

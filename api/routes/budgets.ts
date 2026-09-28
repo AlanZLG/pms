@@ -154,6 +154,15 @@ router.post('/budgets/:budgetId/reject', financeRequired, (req: AuthRequest, res
   } catch (e) { next(e) }
 })
 
+router.get('/budgets/mine', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const budgets = budgetRepo.findByCreator(req.userId!)
+    res.json({
+      budgets: budgets.map((b) => ({ ...b, projectName: projectRepo.findById(b.projectId)?.name || '' })),
+    })
+  } catch (e) { next(e) }
+})
+
 router.get('/budgets/pending', financeRequired, (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const pending = budgetRepo.findPending()
