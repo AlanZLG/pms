@@ -24,7 +24,7 @@ import { dueLabel } from '@/lib/date'
 import { cn } from '@/lib/utils'
 import type { Task, StatsOverview, BurndownData, Project } from '../../shared/types'
 import { STATUS_COLORS_HEX, PROJECT_STATUS_META } from '@/lib/constants'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 const PROJECT_STATUS_ORDER: Record<string, number> = { active: 0, planning: 1, completed: 2, archived: 3 }
 
@@ -41,18 +41,37 @@ export default function Dashboard() {
   const overview = useSwr<StatsOverview>('overview', () => api.overview())
   const burndown = useSwr<BurndownData>('burndown:all', () => api.burndown(''))
   const projects = useSwr<{ projects: Project[] }>('projects:list', () => api.listProjects())
-  const tasks = useSwr<Task[]>(userId ? `tasks:user:${userId}` : null, async () => {
-    if (!userId) return []
-    const { projects } = await api.listProjects()
-    const all: Task[] = []
-    await Promise.all(
-      projects.map(async (p) => {
-        const { tasks } = await api.listTasks(p.id)
-        all.push(...tasks)
-      }),
+// 待办任务 + 我负责项目的逾期任务（同一批请求内派生，避免重复拉取）
+type OverdueTask = Task & { projectName: string }
+const tasks = useSwr<{ mine: Task[]; overdue: OverdueTask[] }>(userId ? `tasks:user:${userId}` : null, async () => {
+  if (!userId) return { mine: [], overdue: [] }
+  const { projects } = await api.listProjects()
+  const all: Task[] = []
+  const nameById = new Map<string, string>()
+  const ownedIds = new Set(projects.filter((p) => p.ownerId === userId).map((p) => p.id))
+  await Promise.all(
+    projects.map(async (p) => {
+      nameById.set(p.id, p.name)
+      const { tasks } = await api.listTasks(p.id)
+      all.push(...tasks)
+    }),
+  )
+  const today = new Date()
+  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const mine = all.filter((t) => t.assigneeId === userId && t.status !== 'done')
+  const overdue: OverdueTask[] = all
+    .filter(
+      (t) =>
+        ownedIds.has(t.projectId) &&
+        t.status !== 'done' &&
+        !!t.dueDate &&
+        t.dueDate.slice(0, 10) < todayStr,
     )
-    return all.filter((t) => t.assigneeId === userId && t.status !== 'done')
-  })
+    .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
+    .map((t) => ({ ...t, projectName: nameById.get(t.projectId) || '' }))
+  return { mine, overdue }
+})
+const [todoTab, setTodoTab] = useState<'mine' | 'overdue'>('mine')
 
   const trend = overview.data?.trend || []
   const totalTasks =
@@ -109,7 +128,7 @@ export default function Dashboard() {
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <p className="font-display text-3xl text-text-primary">你好,{user?.name?.split('')[0]} 👋</p>
-          <p className="mt-1 text-sm text-muted">今天有 {tasks.data?.length || 0} 个任务待你推进。</p>
+          <p className="mt-1 text-sm text-muted">今天有 {tasks.data?.mine.length || 0} 个任务待你推进。</p>
         </div>
         <Link
           to="/projects"
@@ -266,9 +285,28 @@ export default function Dashboard() {
       <Card className="p-5">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="font-display text-lg text-text-primary">我的待办任务</h3>
-          <Link to="/projects" className="text-xs text-brand-soft hover:underline">
-            查看全部
-          </Link>
+          <div className="flex items-center gap-1 rounded-lg bg-bg-soft p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setTodoTab('mine')}
+              className={cn(
+                'rounded-md px-2.5 py-1 transition',
+                todoTab === 'mine' ? 'bg-bg-card text-text-primary shadow-sm' : 'text-muted hover:text-text-secondary',
+              )}
+            >
+              指派给我 {tasks.data ? `(${tasks.data.mine.length})` : ''}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTodoTab('overdue')}
+              className={cn(
+                'rounded-md px-2.5 py-1 transition',
+                todoTab === 'overdue' ? 'bg-bg-card text-text-primary shadow-sm' : 'text-muted hover:text-text-secondary',
+              )}
+            >
+              负责项目逾期 {tasks.data ? `(${tasks.data.overdue.length})` : ''}
+            </button>
+          </div>
         </div>
         {tasks.loading ? (
           <div className="space-y-2">
@@ -276,37 +314,52 @@ export default function Dashboard() {
               <UiSkeleton key={i} className="h-14" />
             ))}
           </div>
-        ) : tasks.data && tasks.data.length > 0 ? (
-          <ul className="divide-y divide-bg-border">
-            {tasks.data.slice(0, 8).map((t) => {
-              const due = dueLabel(t.dueDate, t.status === 'done')
-              return (
-                <Link
-                  key={t.id}
-                  to={`/projects/${t.projectId}`}
-                  className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
-                >
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-brand" />
-                  <span className="flex-1 truncate text-sm text-text-primary">{t.title}</span>
-                  <PriorityBadge priority={t.priority} />
-                  <StatusBadge status={t.status} />
-                  <span
-                    className={cn(
-                      'text-xs',
-                      due.tone === 'overdue' && 'text-danger',
-                      due.tone === 'soon' && 'text-warn',
-                      due.tone === 'none' && 'text-muted',
-                      due.tone === 'normal' && 'text-text-secondary',
-                    )}
-                  >
-                    {due.text}
-                  </span>
-                </Link>
-              )
-            })}
-          </ul>
         ) : (
-          <EmptyState title="今日暂无任务" hint="先到项目中认领一些吧" />
+          (() => {
+            const list = todoTab === 'mine' ? tasks.data?.mine ?? [] : tasks.data?.overdue ?? []
+            if (list.length === 0) {
+              return todoTab === 'mine' ? (
+                <EmptyState title="今日暂无任务" hint="先到项目中认领一些吧" />
+              ) : (
+                <EmptyState title="负责的项目没有逾期任务" hint="继续保持" />
+              )
+            }
+            return (
+              <ul className="divide-y divide-bg-border">
+                {list.slice(0, 8).map((t) => {
+                  const due = dueLabel(t.dueDate, t.status === 'done')
+                  return (
+                    <Link
+                      key={t.id}
+                      to={`/projects/${t.projectId}`}
+                      className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
+                    >
+                      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', todoTab === 'overdue' ? 'bg-danger' : 'bg-brand')} />
+                      {todoTab === 'overdue' && (
+                        <span className="max-w-28 shrink-0 truncate rounded bg-bg-soft px-1.5 py-0.5 text-xs text-muted">
+                          {(t as OverdueTask).projectName}
+                        </span>
+                      )}
+                      <span className="flex-1 truncate text-sm text-text-primary">{t.title}</span>
+                      <PriorityBadge priority={t.priority} />
+                      <StatusBadge status={t.status} />
+                      <span
+                        className={cn(
+                          'text-xs',
+                          due.tone === 'overdue' && 'text-danger',
+                          due.tone === 'soon' && 'text-warn',
+                          due.tone === 'none' && 'text-muted',
+                          due.tone === 'normal' && 'text-text-secondary',
+                        )}
+                      >
+                        {due.text}
+                      </span>
+                    </Link>
+                  )
+                })}
+              </ul>
+            )
+          })()
         )}
       </Card>
     </div>
