@@ -183,7 +183,8 @@ router.get('/me/timesheet', (req: AuthRequest, res: Response, next: NextFunction
       FROM task_hours th
       JOIN tasks t ON th.task_id = t.id
       JOIN projects p ON p.id = t.project_id
-      WHERE th.user_id = ? AND th.date >= ? AND th.date <= ? AND th.op_log_id IS NULL${scopeClause}
+      WHERE th.user_id = ? AND th.date >= ? AND th.date <= ? AND th.op_log_id IS NULL
+        AND t.deleted_at IS NULL AND p.deleted_at IS NULL${scopeClause}
     `).all(userId, weekStart, weekEnd, ...scopeParams) as SqlRow[]
 
     res.json({
@@ -204,7 +205,9 @@ router.get('/me/timesheet', (req: AuthRequest, res: Response, next: NextFunction
 })
 
 // 按周工时表批量提交：每格 = 该任务当天的实际工时总数（替换语义）
-// 计费工时跟随规则：原记录计费=内部时同步改为新值；用户自定义过计费比例的保持不动，避免覆盖精细数据
+// 格子显示的是当天全部手动记录的合计，因此替换时对全部匹配记录整体重写为一条合并记录
+// （保留首条记录的 id/时薪快照/登记时间，备注拼接；计费工时跟随规则：原计费=原内部时同步改为新值，
+//   用户自定义过计费比例的保持合计不动，避免覆盖精细数据）
 const bulkSchema = z.object({
   entries: z.array(z.object({
     taskId: z.string().min(1),
@@ -233,25 +236,37 @@ router.post('/hours/bulk', (req: AuthRequest, res: Response, next: NextFunction)
             throw new ApiError(400, `「${task.title}」${entry.date} 登记 ${entry.hours}h 超过单日上限 ${cap}h（计划工时 ${planned}h × 20%），请分摊到多天或调整任务计划工时`)
           }
         }
-        const existing = db.prepare(
-          'SELECT * FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL',
-        ).get(entry.taskId, userId, entry.date) as SqlRow | undefined
+        // 合计口径：格子显示当天全部手动记录之和，保存时对全部匹配记录整体操作（而非单条替换）
+        const existingRows = db.prepare(
+          'SELECT * FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL ORDER BY created_at, id',
+        ).all(entry.taskId, userId, entry.date) as SqlRow[]
 
         if (entry.hours <= 0) {
-          if (existing) { db.prepare('DELETE FROM task_hours WHERE id = ?').run(existing.id); removed++ }
-          else unchanged++
+          if (existingRows.length > 0) {
+            db.prepare('DELETE FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL')
+              .run(entry.taskId, userId, entry.date)
+            removed++
+          } else unchanged++
           continue
         }
-        if (!existing) {
+        if (existingRows.length === 0) {
           hoursRepo.create({ taskId: entry.taskId, userId, date: entry.date, actualHours: entry.hours, billedHours: entry.hours, description: '' })
           created++
           continue
         }
-        const curActual = Number(existing.actual_hours) || 0
-        const curBilled = Number(existing.billed_hours) || 0
-        if (curActual === entry.hours) { unchanged++; continue }
-        const newBilled = curBilled === curActual ? entry.hours : curBilled
-        db.prepare('UPDATE task_hours SET actual_hours = ?, billed_hours = ? WHERE id = ?').run(entry.hours, newBilled, existing.id)
+        const totalActual = existingRows.reduce((s, r) => s + (Number(r.actual_hours) || 0), 0)
+        if (Math.abs(totalActual - entry.hours) < 1e-9) { unchanged++; continue }
+        // 合并重写为一条：保留首条记录的 id/时薪快照/登记时间，计划工时与备注取各条合计/拼接
+        const totalBilled = existingRows.reduce((s, r) => s + (Number(r.billed_hours) || 0), 0)
+        const newBilled = totalBilled === totalActual ? entry.hours : totalBilled
+        const newPlanned = existingRows.reduce((s, r) => s + (Number(r.planned_hours) || 0), 0)
+        const newDesc = existingRows.map((r) => String(r.description || '').trim()).filter(Boolean).join('\n')
+        const first = existingRows[0]
+        db.prepare('DELETE FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL')
+          .run(entry.taskId, userId, entry.date)
+        db.prepare(
+          'INSERT INTO task_hours (id, task_id, user_id, date, planned_hours, actual_hours, billed_hours, description, rate_snapshot, rate_source, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        ).run(first.id, entry.taskId, userId, entry.date, newPlanned, entry.hours, newBilled, newDesc, first.rate_snapshot ?? null, first.rate_source ?? null, first.created_at)
         updated++
       }
     })
