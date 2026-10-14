@@ -97,7 +97,8 @@ router.put('/me/password', authRequired, async (req: AuthRequest, res: Response,
       throw new ApiError(400, '当前密码不正确')
     }
     userRepo.updatePassword(user.id, bcrypt.hashSync(parsed.data.newPassword, 10))
-    res.json({ success: true })
+    // 密码变更使旧 token 失效，返回新 token 保持当前会话
+    res.json({ success: true, token: signToken(user.id, user.role) })
   } catch (e) { next(e) }
 })
 
