@@ -1,8 +1,8 @@
 // 项目列表页
 
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Plus, Search, ArrowRight, Download, Trash2, Check, X } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { Plus, Search, ArrowRight, Download, Trash2, Check, X, LayoutGrid, List, Pencil } from 'lucide-react'
 import { useSwr } from '@/lib/cache'
 import { useDebounce } from '@/hooks/useDebounce'
 import { api } from '@/lib/api'
@@ -22,6 +22,33 @@ export default function Projects() {
   const [rejectError, setRejectError] = useState('')
   const debouncedKeyword = useDebounce(keyword, 300)
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all')
+  // 视图切换（卡片/表格），localStorage 记住偏好
+  const [view, setView] = useState<'card' | 'table'>(() => (localStorage.getItem('projects:view') === 'table' ? 'table' : 'card'))
+  const switchView = (v: 'card' | 'table') => {
+    setView(v)
+    localStorage.setItem('projects:view', v)
+  }
+  // 表格排序：默认序号升序
+  const [sortKey, setSortKey] = useState<'seq' | 'name' | 'dueDate'>('seq')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const toggleSort = (key: 'seq' | 'name' | 'dueDate') => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
+  // 卡片排序：默认最新创建在前，可切序号升/降序（localStorage 记住偏好）
+  const [cardSort, setCardSort] = useState<'seq-asc' | 'seq-desc' | 'created-desc' | 'created-asc'>(() => {
+    const v = localStorage.getItem('projects:cardSort')
+    return v === 'seq-asc' || v === 'seq-desc' || v === 'created-asc' ? v : 'created-desc'
+  })
+  const switchCardSort = (v: 'seq-asc' | 'seq-desc' | 'created-desc' | 'created-asc') => {
+    setCardSort(v)
+    localStorage.setItem('projects:cardSort', v)
+  }
+  const navigate = useNavigate()
   const projects = useSwr<Project[]>(
     `projects:list:kw=${debouncedKeyword}:status=${filter}`,
     () => api.listProjects().then((r) => r.projects),
@@ -37,6 +64,23 @@ export default function Projects() {
     if (filter === 'completed' && p.status !== 'completed') return false
     if (debouncedKeyword && !p.name.includes(debouncedKeyword) && !p.description.includes(debouncedKeyword)) return false
     return true
+  })
+
+  // 排序：表格按列排序（默认序号升序）；卡片按排序器（默认最新创建在前）
+  const seqVal = (s: number | null | undefined) => (s ?? Number.MAX_SAFE_INTEGER)
+  const sorted = [...filtered].sort((a, b) => {
+    if (view === 'table') {
+      const dir = sortDir === 'asc' ? 1 : -1
+      if (sortKey === 'seq') return (seqVal(a.seq) - seqVal(b.seq)) * dir
+      if (sortKey === 'name') return a.name.localeCompare(b.name, 'zh') * dir
+      const av = a.dueDate ? new Date(a.dueDate).getTime() : Number.MAX_SAFE_INTEGER
+      const bv = b.dueDate ? new Date(b.dueDate).getTime() : Number.MAX_SAFE_INTEGER
+      return (av - bv) * dir
+    }
+    if (cardSort === 'seq-asc' || cardSort === 'seq-desc') {
+      return (seqVal(a.seq) - seqVal(b.seq)) * (cardSort === 'seq-asc' ? 1 : -1)
+    }
+    return (new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()) * (cardSort === 'created-asc' ? 1 : -1)
   })
 
   return (
@@ -87,6 +131,35 @@ export default function Projects() {
             </button>
           ))}
         </div>
+        {view === 'card' && (
+          <select
+            value={cardSort}
+            onChange={(e) => switchCardSort(e.target.value as 'seq-asc' | 'seq-desc' | 'created-desc' | 'created-asc')}
+            title="卡片排序"
+            className="rounded-lg border border-bg-border bg-bg-soft px-2 py-1.5 text-xs text-text-secondary outline-none focus:border-brand"
+          >
+            <option value="created-desc">最新创建</option>
+            <option value="created-asc">最早创建</option>
+            <option value="seq-asc">序号升序</option>
+            <option value="seq-desc">序号降序</option>
+          </select>
+        )}
+        <div className="ml-auto flex gap-1 rounded-lg bg-bg-soft p-1">
+          <button
+            onClick={() => switchView('card')}
+            title="卡片视图"
+            className={'rounded-md px-2 py-1.5 transition ' + (view === 'card' ? 'bg-brand text-text-primary' : 'text-muted hover:text-text-secondary')}
+          >
+            <LayoutGrid className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => switchView('table')}
+            title="表格视图"
+            className={'rounded-md px-2 py-1.5 transition ' + (view === 'table' ? 'bg-brand text-text-primary' : 'text-muted hover:text-text-secondary')}
+          >
+            <List className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {projects.loading ? (
@@ -97,6 +170,80 @@ export default function Projects() {
         </div>
       ) : filtered.length === 0 ? (
         <EmptyState title="暂无项目" hint="点击右上角新建项目开始协作" />
+      ) : view === 'table' ? (
+        <div className="overflow-hidden rounded-2xl border border-bg-border bg-bg-panel/70 shadow-card backdrop-blur animate-fade-up">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-bg-border text-left text-xs text-muted">
+                  <th className="px-4 py-3 font-medium">
+                    <button onClick={() => toggleSort('seq')} className="flex items-center gap-1 hover:text-text-secondary">
+                      序号{sortKey === 'seq' && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 font-medium">
+                    <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-text-secondary">
+                      项目名称{sortKey === 'name' && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                  </th>
+                  <th className="px-4 py-3 font-medium">类型</th>
+                  <th className="px-4 py-3 font-medium">状态</th>
+                  <th className="px-4 py-3 font-medium">负责人</th>
+                  <th className="px-4 py-3 font-medium">进度</th>
+                  <th className="px-4 py-3 font-medium">
+                    <button onClick={() => toggleSort('dueDate')} className="flex items-center gap-1 hover:text-text-secondary">
+                      截止日期{sortKey === 'dueDate' && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((p) => (
+                  <tr
+                    key={p.id}
+                    onClick={() => navigate(`/projects/${p.id}`)}
+                    className="cursor-pointer border-b border-bg-border/60 transition last:border-0 hover:bg-bg-soft/60"
+                  >
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <SeqCell project={p} canEdit={user?.role === 'admin' || p.ownerId === user?.id} onSaved={reload} />
+                    </td>
+                    <td className="max-w-[18rem] px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <NameCell project={p} canEdit={user?.role === 'admin' || p.ownerId === user?.id} onSaved={reload} />
+                        {p.mergedIntoProjectId && (
+                          <span className="whitespace-nowrap rounded-md bg-teal-500/15 px-1.5 py-0.5 text-[10px] font-medium text-teal-400">已合并</span>
+                        )}
+                        {p.deleteRequestedAt && (
+                          <span className="whitespace-nowrap rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">删除审批中</span>
+                        )}
+                      </div>
+                      {p.description && <div className="mt-0.5 line-clamp-1 text-xs text-muted">{p.description}</div>}
+                    </td>
+                    <td className="px-4 py-3"><ProjectTypeBadge type={p.projectType} /></td>
+                    <td className="px-4 py-3"><ProjectStatusBadge status={p.status} /></td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5 text-xs text-muted" title="项目负责人">
+                        <span className="h-2 w-2 rounded-full" style={{ background: p.ownerAvatar || '#475569' }} />
+                        <span className="max-w-[8rem] truncate text-text-secondary">{p.ownerName}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-1.5 w-16 overflow-hidden rounded-full bg-bg-soft">
+                          <div className="h-full rounded-full bg-brand-grad" style={{ width: `${p.progress}%` }} />
+                        </div>
+                        <span className="font-mono text-xs text-muted">{p.progress}%</span>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-xs text-muted">
+                      {p.dueDate ? fmtDate(p.dueDate, 'yyyy-MM-dd') : '无截止'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
       ) : (
         <div className="grid gap-4 animate-stagger sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((p) => (
@@ -104,6 +251,9 @@ export default function Projects() {
               <Card className="group h-full p-5 transition hover:-translate-y-0.5 hover:border-brand/40 hover:shadow-glow">
                 <div className="mb-3 flex items-center justify-between">
                   <div className="flex items-center gap-2">
+                    <span className="rounded-md bg-bg-soft px-1.5 py-0.5 font-mono text-[11px] text-muted" title="项目序号">
+                      #{p.seq ?? '-'}
+                    </span>
                     <ProjectTypeBadge type={p.projectType} />
                     {p.mergedIntoProjectId && (
                       <span className="rounded-md bg-teal-500/15 px-2 py-0.5 text-xs font-medium text-teal-400">已合并</span>
@@ -169,7 +319,9 @@ export default function Projects() {
                     <ArrowRight className="h-4 w-4 text-muted transition group-hover:translate-x-1 group-hover:text-brand-soft" />
                   </div>
                 </div>
-                <h3 className="mb-1 font-display text-lg text-text-primary">{p.name}</h3>
+                <h3 className="mb-1 font-display text-lg text-text-primary">
+                  <NameCell project={p} canEdit={user?.role === 'admin' || p.ownerId === user?.id} onSaved={reload} />
+                </h3>
                 <p className="mb-4 line-clamp-2 min-h-[2.5rem] text-sm text-muted">{p.description}</p>
                 {p.deleteRejectComment && !p.deleteRequestedAt && (
                   <p className="mb-3 rounded-lg bg-danger/10 px-2 py-1.5 text-xs text-danger">
@@ -303,5 +455,114 @@ export default function Projects() {
         </div>
       )}
     </div>
+  )
+}
+
+// 表格视图的序号单元格：项目负责人/管理员可点击编辑，保存后按插入式顺延重排
+function SeqCell({ project, canEdit, onSaved }: { project: Project; canEdit: boolean; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState('')
+  const notify = useAppStore((s) => s.notify)
+
+  async function commit() {
+    setEditing(false)
+    const n = Number(value)
+    if (!Number.isInteger(n) || n < 1 || n === project.seq) return
+    try {
+      await api.updateProjectSeq(project.id, n)
+      notify('success', '序号已更新，受影响项目已自动顺延')
+      onSaved()
+    } catch (err) {
+      notify('error', getErrorMessage(err, '修改序号失败'))
+    }
+  }
+
+  if (!canEdit) {
+    return <span className="font-mono text-sm text-text-secondary" title="项目序号">#{project.seq ?? '-'}</span>
+  }
+  if (!editing) {
+    return (
+      <button
+        onClick={() => { setValue(String(project.seq ?? '')); setEditing(true) }}
+        className="group/seq flex items-center gap-1 font-mono text-sm text-text-secondary"
+        title="点击修改序号"
+      >
+        #{project.seq ?? '-'}
+        <Pencil className="h-3 w-3 opacity-0 transition group-hover/seq:opacity-60" />
+      </button>
+    )
+  }
+  return (
+    <input
+      autoFocus
+      value={value}
+      inputMode="numeric"
+      onChange={(e) => setValue(e.target.value.replace(/[^0-9]/g, ''))}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit()
+        if (e.key === 'Escape') setEditing(false)
+      }}
+      className="w-16 rounded-md border border-brand bg-bg-soft px-1.5 py-0.5 text-center font-mono text-sm text-text-primary outline-none"
+    />
+  )
+}
+
+// 项目名称单元格：项目负责人/管理员可点击原位改名（卡片/表格通用）；点击时阻断外层卡片/行的跳转
+function NameCell({ project, canEdit, onSaved }: { project: Project; canEdit: boolean; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState('')
+  const notify = useAppStore((s) => s.notify)
+
+  async function commit() {
+    setEditing(false)
+    const name = value.trim()
+    if (!name || name === project.name) return
+    try {
+      await api.updateProject(project.id, { name })
+      notify('success', '项目名称已更新')
+      onSaved()
+    } catch (err) {
+      notify('error', getErrorMessage(err, '修改项目名称失败'))
+    }
+  }
+
+  const blockNav = (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation() }
+
+  if (editing) {
+    return (
+      <span onClick={blockNav} className="min-w-0 flex-1">
+        <input
+          autoFocus
+          value={value}
+          maxLength={60}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit()
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          className="w-full min-w-0 rounded-md border border-brand bg-bg-soft px-1.5 py-0.5 text-sm text-text-primary outline-none"
+        />
+      </span>
+    )
+  }
+  if (!canEdit) {
+    return <span className="truncate font-medium text-text-primary">{project.name}</span>
+  }
+  return (
+    <span
+      onClick={blockNav}
+      className="group/name inline-flex min-w-0 max-w-full items-center gap-1"
+    >
+      <button
+        onClick={() => { setValue(project.name); setEditing(true) }}
+        className="max-w-full truncate text-left font-medium text-text-primary hover:text-brand-soft"
+        title="点击修改项目名称"
+      >
+        {project.name}
+      </button>
+      <Pencil className="h-3 w-3 flex-shrink-0 opacity-0 transition group-hover/name:opacity-60" />
+    </span>
   )
 }

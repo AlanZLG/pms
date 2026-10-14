@@ -41,6 +41,7 @@ import {
   ArrowLeftRight,
   Replace,
   History,
+  Clock,
 } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
@@ -58,6 +59,7 @@ import ProjectDialog, { ProjectStatusBadge, ProjectTypeBadge } from '@/component
 import { MergeProjectDialog } from '@/components/MergeProjectDialog'
 import TaskDialog from '@/components/TaskDialog'
 import TaskDrawer from '@/components/TaskDrawer'
+import HoursLogDialog from '@/components/HoursLogDialog'
 import BudgetPanel from '@/components/BudgetPanel'
 import OpLogsPanel from '@/components/OpLogsPanel'
 import GanttChart from '@/components/GanttChart'
@@ -65,7 +67,7 @@ import KanbanColumnDialog from '@/components/KanbanColumnDialog'
 import MemberImportDialog from '@/components/MemberImportDialog'
 import { useAppStore } from '@/stores/app'
 import { fmtDate, dueLabel } from '@/lib/date'
-import { getUserSortOrder } from '@/lib/utils'
+import { getUserSortOrder, cn } from '@/lib/utils'
 import type { Project, Task, TaskStatus, User, TaskDependency, TaskFilter, SavedFilter, KanbanColumn } from '../../shared/types'
 import { projectLedgerLabel } from '../../shared/types'
 
@@ -106,6 +108,9 @@ export default function ProjectDetail() {
   const [searchParams, setSearchParams] = useSearchParams()
   const data = useAsync(() => api.listTasks(projectId), [projectId])
   const users = useAsync(() => api.listUsers(), [])
+  // 项目健康度（方案 B）：头部徽章展示
+  const healthData = useAsync(() => api.statsHealth(projectId), [projectId])
+  const health = healthData.data?.health.find((h) => h.projectId === projectId)
   const currentUser = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
 
@@ -120,6 +125,8 @@ export default function ProjectDetail() {
   const [mergeDialogOpen, setMergeDialogOpen] = useState(false)
   const [mergeTargetName, setMergeTargetName] = useState('')
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null)
+  // 快捷记工时：当前要登记工时的任务（卡片悬浮按钮/列表操作入口）
+  const [hoursTask, setHoursTask] = useState<Task | null>(null)
   const [showBudget, setShowBudget] = useState(false)
   const [showOpLogs, setShowOpLogs] = useState(false)
   const [taskInitialDates, setTaskInitialDates] = useState<{ startDate?: string; dueDate?: string }>({})
@@ -318,6 +325,15 @@ export default function ProjectDetail() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
 
+  // 状态流转到审核中/已完成时提醒补录工时（工时是投入口径，建议随做随记）
+  const remindLogHours = useCallback((newStatus: TaskStatus, taskTitle: string) => {
+    if (newStatus === 'review' || newStatus === 'done') {
+      notify('info', `已移至「${newStatus === 'review' ? '审核中' : '已完成'}」，别忘了给「${taskTitle}」登记工时`, { duration: 5000 })
+    } else {
+      notify('success', '状态已更新')
+    }
+  }, [notify])
+
   const handleDragEnd = useCallback(async (e: DragEndEvent) => {
     const { active, over } = e
     if (!over) return
@@ -335,7 +351,7 @@ export default function ProjectDetail() {
         const newStatus = overId as TaskStatus
         if (t.status === newStatus) return
         await api.updateTaskStatus(activeId, newStatus)
-        notify('success', '状态已更新')
+        remindLogHours(newStatus, t.title)
       } else if (keyOf(t) === keyOf(overTask)) {
         // 同列内拖拽 → 持久化新顺序（仅手动排序模式）
         if (sortMode !== 'manual') return
@@ -354,13 +370,13 @@ export default function ProjectDetail() {
           : [...targetIds.slice(0, idx), activeId, ...targetIds.slice(idx)]
         await api.updateTaskStatus(activeId, overTask.status)
         if (sortMode === 'manual') await api.reorderTasks(next)
-        notify('success', '状态已更新')
+        remindLogHours(overTask.status, t.title)
       }
       data.reload()
     } catch (err) {
       notify('error', getErrorMessage(err, '操作失败'))
     }
-  }, [tasks, grouped, sortMode, notify, data])
+  }, [tasks, grouped, sortMode, notify, remindLogHours, data])
 
   const openCreate = useCallback((status: TaskStatus = 'todo') => {
     setEditingTask(null)
@@ -427,7 +443,9 @@ export default function ProjectDetail() {
         await api.updateTaskStatus(id, status)
         ok++
       }
-      notify('success', `已更新 ${ok} 个任务状态`, {
+      const remind = status === 'review' || status === 'done'
+      notify('success', `已更新 ${ok} 个任务状态${remind ? '，别忘了补录工时' : ''}`, {
+        duration: remind ? 5000 : undefined,
         undoLabel: '撤销',
         onUndo: async () => {
           for (const snap of snapshots) {
@@ -625,6 +643,9 @@ export default function ProjectDetail() {
           </Link>
           <div className="flex items-center gap-3">
             <h2 className="font-display text-2xl text-text-primary">{project.name}</h2>
+            <span className="rounded-md bg-bg-soft px-2 py-0.5 font-mono text-xs text-muted" title="项目序号">
+              #{project.seq ?? '-'}
+            </span>
             <ProjectTypeBadge type={project.projectType} />
             {project.mergedIntoProjectId && (
               <span className="rounded-md bg-teal-500/15 px-2 py-0.5 text-xs font-medium text-teal-400">
@@ -632,6 +653,36 @@ export default function ProjectDetail() {
               </span>
             )}
             <ProjectStatusBadge status={project.status} />
+            {health && (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium',
+                  health.healthLevel === 'healthy' && 'bg-emerald-500/15 text-emerald-400',
+                  health.healthLevel === 'warning' && 'bg-amber-500/15 text-amber-400',
+                  health.healthLevel === 'danger' && 'bg-rose-500/15 text-rose-400',
+                )}
+                title={
+                  [
+                    `健康分 ${health.healthScore}`,
+                    health.timeProgress !== null ? `时间进度 ${health.timeProgress}%` : '',
+                    health.doneRate !== null ? `完成率 ${health.doneRate}%` : '',
+                    health.deviation !== null ? `偏差 ${health.deviation > 0 ? '+' : ''}${health.deviation}%` : '',
+                    health.overdueDays > 0 ? `已逾期 ${health.overdueDays} 天` : '',
+                    health.overdueTasks > 0 ? `逾期任务 ${health.overdueTasks}/${health.activeTasks}` : '',
+                  ].filter(Boolean).join(' · ')
+                }
+              >
+                <span
+                  className={cn(
+                    'h-2 w-2 rounded-full',
+                    health.healthLevel === 'healthy' && 'bg-emerald-500',
+                    health.healthLevel === 'warning' && 'bg-amber-500',
+                    health.healthLevel === 'danger' && 'bg-rose-500',
+                  )}
+                />
+                健康 {health.healthScore}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-sm text-muted">
             {project.description || '暂无描述'} · 截止 {fmtDate(project.dueDate, 'yyyy-MM-dd')}
@@ -1380,6 +1431,13 @@ export default function ProjectDetail() {
                         {!selectMode && (
                           <>
                             <button
+                              className="mr-2 inline-flex items-center justify-center rounded-md bg-brand/15 p-1.5 text-brand-soft transition hover:bg-brand hover:text-white"
+                              onClick={() => setHoursTask(t)}
+                              title="记工时"
+                            >
+                              <Clock className="h-4 w-4" />
+                            </button>
+                            <button
                               className="mr-2 text-muted hover:text-brand-soft"
                               onClick={() => openEdit(t)}
                               title="编辑"
@@ -1432,6 +1490,7 @@ export default function ProjectDetail() {
                         onOpen={() => setDrawerTaskId(t.id)}
                         onEdit={() => openEdit(t)}
                         onDelete={() => deleteTask(t)}
+                        onLogHours={() => setHoursTask(t)}
                       />
                     ))}
                   </SortableContext>
@@ -1510,6 +1569,13 @@ export default function ProjectDetail() {
         taskId={drawerTaskId}
         onClose={() => setDrawerTaskId(null)}
         onChanged={data.reload}
+      />
+
+      <HoursLogDialog
+        open={!!hoursTask}
+        task={hoursTask}
+        onClose={() => setHoursTask(null)}
+        onSaved={data.reload}
       />
 
       <KanbanColumnDialog
@@ -1610,12 +1676,14 @@ function KanbanCard({
   onOpen,
   onEdit,
   onDelete,
+  onLogHours,
 }: {
   task: Task
   statusKey: string
   onOpen: () => void
   onEdit: () => void
   onDelete: () => void
+  onLogHours: () => void
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
@@ -1644,7 +1712,18 @@ function KanbanCard({
     >
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium text-text-primary">{task.title}</p>
-        <div className="flex opacity-0 transition group-hover:opacity-100">
+        <div className="flex items-center gap-1">
+          <button
+            className="inline-flex rounded-md bg-brand/15 p-1 text-brand-soft transition hover:bg-brand hover:text-white"
+            onClick={(e) => {
+              e.stopPropagation()
+              onLogHours()
+            }}
+            title="记工时"
+          >
+            <Clock className="h-3.5 w-3.5" />
+          </button>
+          <div className="flex opacity-0 transition group-hover:opacity-100">
           <button
             className="text-muted hover:text-brand-soft"
             onClick={(e) => {
@@ -1665,6 +1744,7 @@ function KanbanCard({
           >
             <Trash2 className="h-3.5 w-3.5" />
           </button>
+          </div>
         </div>
       </div>
       {task.labels.length > 0 && (

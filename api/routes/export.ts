@@ -123,8 +123,9 @@ router.get('/projects.csv', (req: AuthRequest, res: Response, next: NextFunction
       projects = projects.filter((p) => p.members.some((m) => m.userId === user.id) || p.ownerId === user.id)
     }
 
-    const headers = ['ID', '项目名称', '描述', '状态', '进度', '成员数', '任务数', '截止日期', '创建时间']
+    const headers = ['序号', 'ID', '项目名称', '描述', '状态', '进度', '成员数', '任务数', '截止日期', '创建时间']
     const rows = projects.map((p) => [
+      p.seq ?? '',
       p.id,
       p.name,
       p.description,
