@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   FolderKanban,
   Activity,
@@ -10,7 +10,10 @@ import {
   Clock,
   Users2,
   Calendar,
+  MessageSquarePlus,
+  X,
 } from 'lucide-react'
+import { createPortal } from 'react-dom'
 import {
   PieChart, Pie, Cell, ResponsiveContainer,
   AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -19,10 +22,11 @@ import { useSwr } from '@/lib/cache'
 import { api } from '@/lib/api'
 import { Card, Skeleton as UiSkeleton, EmptyState, PriorityBadge, StatusBadge } from '@/components/ui'
 import { StatSkeleton, CardSkeleton, Skeleton } from '@/components/Skeleton'
+import { ContextMenu, SendMessageModal, MessagesTab, MessageMenuIcon, type ContextMenuItem } from '@/components/messages'
 import { useAppStore } from '@/stores/app'
-import { dueLabel } from '@/lib/date'
+import { dueLabel, fmtDate } from '@/lib/date'
 import { cn } from '@/lib/utils'
-import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject } from '../../shared/types'
+import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject, ProjectHealth, MessageThread, User } from '../../shared/types'
 import { STATUS_COLORS_HEX, PROJECT_STATUS_META } from '@/lib/constants'
 import { useMemo, useState } from 'react'
 
@@ -49,12 +53,33 @@ const APPROVAL_LABELS: Record<string, string> = {
   rejected: '已拒绝',
 }
 
+// 逾期天数（前端展示口径）：按「截止日当天零点」归一，最少 1 天
+function overdueDaysOf(dueDate: string | null): number {
+  if (!dueDate) return 1
+  const d = new Date(dueDate); d.setHours(0, 0, 0, 0)
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  return Math.max(1, Math.round((today.getTime() - d.getTime()) / 86400000))
+}
+
+// 站内消息逾期提醒模板（与系统逾期口径一致：日级比较，当天截止不算逾期）
+function reminderContent(kind: 'task' | 'project', name: string, overdueDays: number, dueDate: string | null): string {
+  const days = Math.max(1, overdueDays)
+  const dueStr = dueDate ? fmtDate(dueDate, 'yyyy-MM-dd') : ''
+  const due = dueStr ? `（截止 ${dueStr}）` : ''
+  return kind === 'task'
+    ? `【逾期提醒】任务「${name}」已逾期 ${days} 天${due}，请尽快处理。`
+    : `【逾期提醒】项目「${name}」已逾期 ${days} 天${due}，请尽快推进。`
+}
+
 export default function Dashboard() {
   const user = useAppStore((s) => s.user)
   const userId = user?.id || ''
   const overview = useSwr<StatsOverview>('overview', () => api.overview())
   const burndown = useSwr<BurndownData>('burndown:all', () => api.burndown(''))
   const projects = useSwr<{ projects: Project[] }>('projects:list', () => api.listProjects())
+  const health = useSwr<{ health: ProjectHealth[] }>('stats:health', () => api.statsHealth())
+  const healthMap = useMemo(() => new Map((health.data?.health ?? []).map((h) => [h.projectId, h])), [health.data])
+  const [overdueOpen, setOverdueOpen] = useState(false)
 // 待办任务 + 我负责项目的逾期任务（同一批请求内派生，避免重复拉取）
 type OverdueTask = Task & { projectName: string }
 const tasks = useSwr<{ mine: Task[]; overdue: OverdueTask[] }>(userId ? `tasks:user:${userId}` : null, async () => {
@@ -66,30 +91,51 @@ const tasks = useSwr<{ mine: Task[]; overdue: OverdueTask[] }>(userId ? `tasks:u
   await Promise.all(
     projects.map(async (p) => {
       nameById.set(p.id, p.name)
-      const { tasks } = await api.listTasks(p.id)
-      all.push(...tasks)
+      try {
+        const { tasks } = await api.listTasks(p.id)
+        all.push(...tasks)
+      } catch {
+        // 概览可见但无任务读取权限的项目（非负责人且非成员）：跳过，不让单个 403 拖垮整个待办卡
+      }
     }),
   )
   const today = new Date()
-  const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const today0 = new Date(today); today0.setHours(0, 0, 0, 0)
   const mine = all.filter((t) => t.assigneeId === userId && t.status !== 'done')
+  // 与我相关的逾期：我负责的项目 或 指派给我的任务；截止日早于今天（日级比较，当天截止不算，与 dueLabel 口径一致）
+  // 管理员/财务核算可见全部项目的逾期；其他角色只看「与我相关」（我负责的项目 + 指派给我的任务）
+  const seeAllOverdue = user?.role === 'admin' || user?.role === 'finance'
   const overdue: OverdueTask[] = all
     .filter(
       (t) =>
-        ownedIds.has(t.projectId) &&
+        (seeAllOverdue || ownedIds.has(t.projectId) || t.assigneeId === userId) &&
         t.status !== 'done' &&
         !!t.dueDate &&
-        t.dueDate.slice(0, 10) < todayStr,
+        new Date(t.dueDate) < today0,
     )
     .sort((a, b) => (a.dueDate || '').localeCompare(b.dueDate || ''))
     .map((t) => ({ ...t, projectName: nameById.get(t.projectId) || '' }))
   return { mine, overdue }
 })
-const [todoTab, setTodoTab] = useState<'mine' | 'overdue' | 'budget'>('mine')
+const [todoTab, setTodoTab] = useState<'mine' | 'overdue' | 'budget' | 'messages'>('mine')
 const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, async () => {
   const { budgets } = await api.myBudgets()
   return budgets
 })
+// 站内消息：会话列表（供 Tab 未读角标与消息 Tab 使用）+ 成员名单（解析收件人姓名）
+const messages = useSwr<{ threads: MessageThread[]; unread: number }>(userId ? 'messages:threads' : null, () => api.listMessageThreads())
+const team = useSwr<{ users: (User & { taskCount: number; activeCount: number })[] }>(userId ? 'team:all' : null, () => api.listUsers())
+
+const navigate = useNavigate()
+const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; items: ContextMenuItem[] } | null>(null)
+const [msgTarget, setMsgTarget] = useState<{
+  recipientId: string
+  recipientName: string
+  contextLabel: string
+  taskId?: string | null
+  projectId?: string | null
+  defaultContent: string
+} | null>(null)
 
   const trend = overview.data?.trend || []
   const totalTasks =
@@ -99,6 +145,47 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
     overview.data?.tasksByStatus.done || 0
 
   const projectList: Project[] = useMemo(() => projects.data?.projects ?? [], [projects.data])
+  const projectById = useMemo(() => new Map(projectList.map((p) => [p.id, p])), [projectList])
+  const nameByUserId = useMemo(() => new Map((team.data?.users ?? []).map((u) => [u.id, u.name] as const)), [team.data])
+
+  // 打开发送弹窗：姓名优先从团队成员解析，退回调用方给的兜底名
+  function openMessage(target: { recipientId: string; fallbackName?: string; contextLabel: string; taskId?: string | null; projectId?: string | null; defaultContent: string }) {
+    setMsgTarget({
+      recipientId: target.recipientId,
+      recipientName: nameByUserId.get(target.recipientId) || target.fallbackName || '成员',
+      contextLabel: target.contextLabel,
+      taskId: target.taskId ?? null,
+      projectId: target.projectId ?? null,
+      defaultContent: target.defaultContent,
+    })
+  }
+
+  // 逾期任务 → 收件人（执行者优先，未指派退回项目负责人）
+  function taskMessageTarget(t: OverdueTask) {
+    const project = projectById.get(t.projectId)
+    const recipientId = t.assigneeId || project?.ownerId || ''
+    if (!recipientId) return null
+    return {
+      recipientId,
+      fallbackName: t.assigneeId ? undefined : project?.ownerName,
+      contextLabel: `任务「${t.title}」`,
+      taskId: t.id,
+      projectId: t.projectId,
+      defaultContent: reminderContent('task', t.title, overdueDaysOf(t.dueDate), t.dueDate),
+    }
+  }
+
+  // 逾期项目 → 给负责人发消息
+  function openProjectMessage(opts: { projectId: string; name: string; ownerId: string; ownerName: string; overdueDays: number; dueDate: string | null }) {
+    if (!opts.ownerId) return
+    openMessage({
+      recipientId: opts.ownerId,
+      fallbackName: opts.ownerName,
+      contextLabel: `项目「${opts.name}」`,
+      projectId: opts.projectId,
+      defaultContent: reminderContent('project', opts.name, opts.overdueDays, opts.dueDate),
+    })
+  }
   const sortedProjects = useMemo(() => {
     return [...projectList].sort((a, b) => {
       return PROJECT_STATUS_ORDER[a.status] - PROJECT_STATUS_ORDER[b.status]
@@ -175,13 +262,30 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
           icon={<CheckCircle2 className="h-5 w-5" />}
           tone="ok"
         />
-        <StatCard
-          title="逾期项目"
-          value={overview.data?.overdueProjects ?? 0}
-          icon={<AlertTriangle className="h-5 w-5" />}
-          tone="warn"
-        />
+        <div onClick={() => overview.data && overview.data.overdueProjects > 0 && setOverdueOpen(true)} className={cn(overview.data && overview.data.overdueProjects > 0 && 'cursor-pointer')}>
+          <StatCard
+            title="逾期项目"
+            value={overview.data?.overdueProjects ?? 0}
+            icon={<AlertTriangle className="h-5 w-5" />}
+            tone="warn"
+          />
+        </div>
       </div>
+
+      {overdueOpen && (
+        <OverduePanel
+          health={health.data?.health ?? []}
+          onClose={() => setOverdueOpen(false)}
+          onSendMessage={(h) => openProjectMessage({
+            projectId: h.projectId,
+            name: h.projectName,
+            ownerId: h.ownerId,
+            ownerName: h.ownerName,
+            overdueDays: h.overdueDays,
+            dueDate: projectById.get(h.projectId)?.dueDate ?? null,
+          })}
+        />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="p-5 lg:col-span-1">
@@ -291,9 +395,28 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
           </div>
         ) : projectList.length > 0 ? (
           <div className="grid gap-4 animate-stagger sm:grid-cols-2 lg:grid-cols-3">
-            {sortedProjects.map((project) => (
-              <ProjectProgressCard key={project.id} project={project} />
-            ))}
+            {sortedProjects.map((project) => {
+              const h = healthMap.get(project.id)
+              const overdue = h && h.overdueDays > 0
+              return (
+                <ProjectProgressCard
+                  key={project.id}
+                  project={project}
+                  health={h}
+                  onContextMenu={overdue ? (e) => {
+                    e.preventDefault()
+                    setCtxMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      items: [
+                        { label: '发消息给负责人', icon: <MessageSquarePlus className="h-4 w-4" />, onClick: () => openProjectMessage({ projectId: project.id, name: project.name, ownerId: project.ownerId, ownerName: project.ownerName || h.ownerName, overdueDays: h.overdueDays, dueDate: project.dueDate }) },
+                        { label: '查看项目', icon: <ArrowRight className="h-4 w-4" />, onClick: () => navigate(`/projects/${project.id}`) },
+                      ],
+                    })
+                  } : undefined}
+                />
+              )
+            })}
           </div>
         ) : (
           <EmptyState title="暂无项目" hint="创建一个新项目开始吧" />
@@ -322,7 +445,7 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
                 todoTab === 'overdue' ? 'bg-bg-card text-text-primary shadow-sm' : 'text-muted hover:text-text-secondary',
               )}
             >
-              负责项目逾期 {tasks.data ? `(${tasks.data.overdue.length})` : ''}
+              {user?.role === 'admin' || user?.role === 'finance' ? '全部逾期' : '与我相关逾期'} {tasks.data ? `(${tasks.data.overdue.length})` : ''}
             </button>
             <button
               type="button"
@@ -334,9 +457,24 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
             >
               我的预算 {myBudgets.data ? `(${myBudgets.data.length})` : ''}
             </button>
+            <button
+              type="button"
+              onClick={() => setTodoTab('messages')}
+              className={cn(
+                'rounded-md px-2.5 py-1 transition',
+                todoTab === 'messages' ? 'bg-bg-card text-text-primary shadow-sm' : 'text-muted hover:text-text-secondary',
+              )}
+            >
+              消息
+              {(messages.data?.unread ?? 0) > 0 && (
+                <span className="ml-1 rounded-full bg-danger px-1.5 py-0.5 text-[10px] font-medium text-white">
+                  {messages.data!.unread}
+                </span>
+              )}
+            </button>
           </div>
         </div>
-        {(todoTab === 'budget' ? myBudgets.loading : tasks.loading) ? (
+        {(todoTab === 'budget' ? myBudgets.loading : todoTab === 'messages' ? messages.loading : tasks.loading) ? (
           <div className="space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
               <UiSkeleton key={i} className="h-14" />
@@ -344,6 +482,15 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
           </div>
         ) : (
           (() => {
+            if (todoTab === 'messages') {
+              return (
+                <MessagesTab
+                  threads={messages.data?.threads ?? []}
+                  userId={userId}
+                  revalidateThreads={messages.revalidate}
+                />
+              )
+            }
             if (todoTab === 'budget') {
               const list = myBudgets.data ?? []
               if (list.length === 0) {
@@ -388,7 +535,7 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
               return todoTab === 'mine' ? (
                 <EmptyState title="今日暂无任务" hint="先到项目中认领一些吧" />
               ) : (
-                <EmptyState title="负责的项目没有逾期任务" hint="继续保持" />
+                <EmptyState title="没有与我相关的逾期任务" hint="继续保持" />
               )
             }
             return (
@@ -400,6 +547,19 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
                       key={t.id}
                       to={`/projects/${t.projectId}`}
                       className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
+                      onContextMenu={todoTab === 'overdue' ? (e) => {
+                        e.preventDefault()
+                        const target = taskMessageTarget(t as OverdueTask)
+                        if (!target) return
+                        setCtxMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          items: [
+                            { label: '发送站内消息', icon: MessageMenuIcon, onClick: () => openMessage(target) },
+                            { label: '查看任务', icon: <ArrowRight className="h-4 w-4" />, onClick: () => navigate(`/projects/${t.projectId}`) },
+                          ],
+                        })
+                      } : undefined}
                     >
                       <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', todoTab === 'overdue' ? 'bg-danger' : 'bg-brand')} />
                       {todoTab === 'overdue' && (
@@ -429,6 +589,20 @@ const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, as
           })()
         )}
       </Card>
+
+      {ctxMenu && <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxMenu.items} onClose={() => setCtxMenu(null)} />}
+      {msgTarget && (
+        <SendMessageModal
+          recipientId={msgTarget.recipientId}
+          recipientName={msgTarget.recipientName}
+          contextLabel={msgTarget.contextLabel}
+          taskId={msgTarget.taskId}
+          projectId={msgTarget.projectId}
+          defaultContent={msgTarget.defaultContent}
+          onClose={() => setMsgTarget(null)}
+          onSent={() => { messages.revalidate() }}
+        />
+      )}
     </div>
   )
 }
@@ -459,12 +633,124 @@ function StatCard({
   )
 }
 
-function ProjectProgressCard({ project }: { project: Project }) {
+// 逾期项目明细弹层：点击仪表盘「逾期项目」统计卡打开；右键项目行可给负责人发站内消息
+function OverduePanel({
+  health,
+  onClose,
+  onSendMessage,
+}: {
+  health: ProjectHealth[]
+  onClose: () => void
+  onSendMessage?: (h: ProjectHealth) => void
+}) {
+  const overdue = health
+    .filter((h) => h.overdueDays > 0)
+    .sort((a, b) => b.overdueDays - a.overdueDays)
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 py-10" onClick={onClose}>
+      <div
+        className="w-full max-w-3xl rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl animate-fade-up"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 text-lg font-medium text-text-primary">
+            <AlertTriangle className="h-5 w-5 text-warn" />
+            逾期项目明细
+            <span className="rounded-md bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-400">{overdue.length}</span>
+          </h3>
+          <button type="button" onClick={onClose} className="text-muted hover:text-text-secondary" aria-label="关闭">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-bg-border text-left text-xs text-muted">
+                <th className="px-3 py-2 font-medium">项目</th>
+                <th className="px-3 py-2 font-medium">负责人</th>
+                <th className="px-3 py-2 text-right font-medium">逾期天数</th>
+                <th className="px-3 py-2 text-right font-medium">时间进度</th>
+                <th className="px-3 py-2 text-right font-medium">完成率</th>
+                <th className="px-3 py-2 text-right font-medium">偏差</th>
+                <th className="px-3 py-2 text-right font-medium">逾期任务</th>
+                <th className="px-3 py-2 text-right font-medium">健康</th>
+              </tr>
+            </thead>
+            <tbody>
+              {overdue.map((h) => (
+                <tr
+                  key={h.projectId}
+                  className="border-b border-bg-border/60 last:border-0"
+                  onContextMenu={onSendMessage ? (e) => { e.preventDefault(); onSendMessage(h) } : undefined}
+                  title={onSendMessage ? '右键可给负责人发送站内消息' : undefined}
+                >
+                  <td className="px-3 py-2.5">
+                    <Link to={`/projects/${h.projectId}`} onClick={onClose} className="text-text-primary hover:text-brand-soft">
+                      {h.projectName}
+                    </Link>
+                  </td>
+                  <td className="px-3 py-2.5 text-muted">{h.ownerName || '—'}</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-danger">{h.overdueDays} 天</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{h.timeProgress ?? '—'}%</td>
+                  <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{h.doneRate ?? '—'}%</td>
+                  <td className={cn('px-3 py-2.5 text-right font-mono', h.deviation !== null && h.deviation < 0 ? 'text-danger' : 'text-text-secondary')}>
+                    {h.deviation !== null ? `${h.deviation > 0 ? '+' : ''}${h.deviation}%` : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-mono text-warn">
+                    {h.overdueTasks > 0 ? `${h.overdueTasks}/${h.activeTasks}` : '—'}
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <HealthBadge h={h} className="justify-end" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {onSendMessage && <p className="mt-3 text-xs text-muted">提示：右键点击项目行，可给负责人发送站内消息。</p>}
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+// 健康度徽章配色（绿健康 / 黄预警 / 红风险）
+const HEALTH_META: Record<ProjectHealth['healthLevel'], { label: string; dot: string; text: string }> = {
+  healthy: { label: '健康', dot: 'bg-emerald-500', text: 'text-emerald-400' },
+  warning: { label: '预警', dot: 'bg-amber-500', text: 'text-amber-400' },
+  danger: { label: '风险', dot: 'bg-rose-500', text: 'text-rose-400' },
+}
+
+function healthTooltip(h: ProjectHealth): string {
+  const parts = [`健康分 ${h.healthScore}（${HEALTH_META[h.healthLevel].label}）`]
+  if (h.timeProgress !== null) parts.push(`时间进度 ${h.timeProgress}%`)
+  if (h.doneRate !== null) parts.push(`完成率 ${h.doneRate}%`)
+  if (h.deviation !== null) parts.push(`偏差 ${h.deviation > 0 ? '+' : ''}${h.deviation}%`)
+  if (h.overdueDays > 0) parts.push(`已逾期 ${h.overdueDays} 天`)
+  if (h.overdueTasks > 0) parts.push(`逾期任务 ${h.overdueTasks}/${h.activeTasks}`)
+  return parts.join(' · ')
+}
+
+function HealthBadge({ h, className }: { h: ProjectHealth; className?: string }) {
+  const meta = HEALTH_META[h.healthLevel]
+  return (
+    <span
+      className={cn('inline-flex items-center gap-1.5', className)}
+      title={healthTooltip(h)}
+    >
+      <span className={cn('h-2 w-2 shrink-0 rounded-full', meta.dot)} />
+      <span className={cn('font-mono text-xs font-semibold', meta.text)}>{h.healthScore}</span>
+    </span>
+  )
+}
+
+function ProjectProgressCard({ project, health, onContextMenu }: { project: Project; health?: ProjectHealth; onContextMenu?: React.MouseEventHandler }) {
   const status = PROJECT_STATUS_META[project.status]
   const due = dueLabel(project.dueDate, project.status === 'completed')
 
   return (
-    <Link to={`/projects/${project.id}`} className="group">
+    <Link to={`/projects/${project.id}`} onContextMenu={onContextMenu} className="group">
       <Card className="p-4 h-full transition hover:border-brand/40 hover:shadow-lg">
         <div className="flex items-start justify-between mb-3">
           <div className="flex-1 min-w-0">
@@ -483,7 +769,10 @@ function ProjectProgressCard({ project }: { project: Project }) {
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-muted">进度</span>
-            <span className="text-xs font-mono font-semibold text-text-primary">{project.progress}%</span>
+            <span className="flex items-center gap-2">
+              {health && <HealthBadge h={health} />}
+              <span className="text-xs font-mono font-semibold text-text-primary">{project.progress}%</span>
+            </span>
           </div>
           <div className="h-1.5 bg-bg-border rounded-full overflow-hidden">
             <div

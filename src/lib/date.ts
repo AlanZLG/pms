@@ -1,6 +1,6 @@
 // 日期与显示工具
 
-import { format, formatDistanceToNow, isToday, isPast, isThisWeek } from 'date-fns'
+import { format, formatDistanceToNow, isToday, isThisWeek, startOfDay } from 'date-fns'
 import { zhCN } from 'date-fns/locale'
 
 export function fmtDate(d: string | null, pattern = 'MM-dd'): string {
@@ -41,7 +41,10 @@ export function dueLabel(d: string | null, done = false): { text: string; tone: 
       return { text: '无截止', tone: 'none' }
     }
   }
-  if (isPast(date)) return { text: '已逾期', tone: 'overdue' }
+  // 逾期按日级比较：截止日早于今天才算逾期，当天截止显示"今天截止"（与 Dashboard/甘特图口径一致）
+  // 注意不能用 isPast(startOfDay(date))：那是拿"当天 00:00"和"当前时刻"比，
+  // 起止同天的当天任务一创建就会被误判成"已逾期"
+  if (startOfDay(date) < startOfDay(new Date())) return { text: '已逾期', tone: 'overdue' }
   if (isToday(date)) return { text: '今天截止', tone: 'soon' }
   if (isThisWeek(date, { weekStartsOn: 1 })) return { text: format(date, 'EEEE', { locale: zhCN }), tone: 'soon' }
   return { text: format(date, 'MM-dd'), tone: 'normal' }
