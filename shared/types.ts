@@ -592,7 +592,7 @@ export interface OpLog {
 }
 
 /** 台账自定义列（扩展字段）数量上限：__ 前缀的内部字段（如 __sourceTaskId）不占名额 */
-export const OP_LOG_MAX_EXTRA_COLUMNS = 5
+export const OP_LOG_MAX_EXTRA_COLUMNS = 10
 
 /** 台账自定义列定义（项目级配置）：key 为数据存储键（稳定），label 为显示名/Excel 表头 */
 export interface OpLogExtraColumn {
