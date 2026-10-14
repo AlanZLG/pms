@@ -249,13 +249,13 @@ export default function Team() {
                 )}
               </div>
               <div className="mt-4 grid grid-cols-4 gap-2 text-center">
-                <Stat label="负责" value={u.taskCount} />
-                <Stat label="进行中" value={u.activeCount} />
                 <Stat
                   label="名下项目"
                   value={(u.ownedProjectNames ?? []).length}
                   title={(u.ownedProjectNames ?? []).length ? (u.ownedProjectNames ?? []).join('、') : '未负责任何项目'}
                 />
+                <Stat label="进行中" value={u.activeCount} />
+                <Stat label="当前任务数" value={u.taskCount} title="指派给他的未删除任务总数（含已完成）" />
                 <Stat label="角色" value={roleLabel(u.role)} text />
               </div>
               <div className="mt-3">

@@ -47,6 +47,10 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
   const [hoursBusy, setHoursBusy] = useState(false)
   // 转运维台账
   const [showOpLogDialog, setShowOpLogDialog] = useState(false)
+  // 工时区定位高亮（顶部「记工时」按钮触发）
+  const hoursSectionRef = useRef<HTMLDivElement>(null)
+  const hoursActualRef = useRef<HTMLInputElement>(null)
+  const [hoursHighlight, setHoursHighlight] = useState(false)
   const user = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -294,6 +298,17 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
     }
   }
 
+  // 顶部「记工时」按钮：滚动定位到工时登记区并聚焦内部工时输入框
+  function focusHours() {
+    hoursSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setHoursHighlight(true)
+    setTimeout(() => {
+      hoursActualRef.current?.focus()
+      hoursActualRef.current?.select()
+    }, 350)
+    setTimeout(() => setHoursHighlight(false), 2200)
+  }
+
   function userName(id: string | null | undefined): string {
     if (!id) return ''
     return allUsers.find((u) => u.id === id)?.name || ''
@@ -401,9 +416,14 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                 <StatusBadge status={task.status} />
                 <PriorityBadge priority={task.priority} />
               </div>
-              <button onClick={onClose} className="text-muted hover:text-text-primary">
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={focusHours} title="滚动到工时登记区">
+                  <Clock className="h-3.5 w-3.5" /> 记工时
+                </Button>
+                <button onClick={onClose} className="text-muted hover:text-text-primary">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-auto px-5 py-4">
@@ -607,7 +627,13 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
               </div>
 
               {/* 工时登记（内部投入 / 对客户计费分开） */}
-              <div className="mt-6">
+              <div
+                ref={hoursSectionRef}
+                className={cn(
+                  'mt-6 rounded-xl transition duration-300',
+                  hoursHighlight && 'ring-2 ring-brand/50 ring-offset-2 ring-offset-bg-soft',
+                )}
+              >
                 <div className="mb-3 flex items-center justify-between">
                   <h3 className="font-display text-base text-text-primary">工时登记 ({hours.length})</h3>
                   <div className="flex items-center gap-3 text-xs text-muted">
@@ -675,6 +701,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                     min="0"
                     step="0.5"
                     placeholder="内部工时"
+                    ref={hoursActualRef}
                     value={hoursForm.actualHours}
                     onChange={(e) => setHoursForm({ ...hoursForm, actualHours: e.target.value })}
                     className="w-24 text-sm"

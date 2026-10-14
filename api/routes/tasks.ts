@@ -28,6 +28,28 @@ export function ensureAssigneeMembership(projectId: string, assigneeId: string |
   projectRepo.addMember(projectId, assigneeId, 'editor')
 }
 
+// 项目负责人也收任务动态（v1.10.1）：别人在项目里建任务/转派/改状态/评论时同步知会负责人。
+// 跳过：负责人本人操作、负责人就是已通知对象（执行者/@提及），避免重复打扰
+function notifyProjectOwner(
+  projectId: string,
+  operatorId: string | undefined,
+  notified: Array<string | null | undefined>,
+  type: 'assign' | 'status' | 'comment',
+  title: string,
+  body: string,
+  taskId?: string,
+): void {
+  const project = projectRepo.findById(projectId)
+  if (!project?.ownerId) return
+  if (project.ownerId === operatorId || notified.includes(project.ownerId)) return
+  try {
+    notificationRepo.create({ userId: project.ownerId, type, title, body, taskId, projectId })
+    pushFeishuNotification(project.ownerId, type, title, body)
+  } catch {
+    // 忽略通知发送失败
+  }
+}
+
 // 全局搜索任务
 router.get('/search', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -174,6 +196,9 @@ router.post('/projects/:projectId/tasks', (req: AuthRequest, res: Response, next
         // 忽略通知发送失败
       }
     }
+    // 项目负责人同步知会新任务（v1.10.1）
+    notifyProjectOwner(project.id, req.userId, [task.assigneeId], 'status',
+      `项目「${project.name}」新增任务`, `「${task.title}」`, task.id)
     res.status(201).json({ task })
   } catch (e) { next(e) }
 })
@@ -262,6 +287,30 @@ router.patch('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunct
           // 忽略解除指派通知发送失败
         }
       }
+      // 项目负责人同步知会转派（v1.10.1）
+      notifyProjectOwner(updated.projectId, req.userId, [newAssignee, prevAssignee], 'assign',
+        '项目内任务负责人变更', `「${updated.title}」`, updated.id)
+    }
+    // 状态变更通知（主 PATCH 也可能改状态，对齐 /status 端点：执行者 + 项目负责人）
+    if (parsed.data.status !== undefined && parsed.data.status !== prevStatus) {
+      const label: Record<string, string> = { todo: '待办', in_progress: '进行中', review: '审核中', done: '已完成' }
+      if (task.assigneeId && task.assigneeId !== req.userId) {
+        try {
+          notificationRepo.create({
+            userId: task.assigneeId,
+            type: 'status',
+            title: `任务状态变更为「${label[parsed.data.status]}」`,
+            body: `「${updated.title}」`,
+            taskId: updated.id,
+            projectId: updated.projectId,
+          })
+          pushFeishuNotification(task.assigneeId, 'status', `任务状态变更为「${label[parsed.data.status]}」`, `「${updated.title}」`)
+        } catch {
+          // 忽略状态通知发送失败
+        }
+      }
+      notifyProjectOwner(updated.projectId, req.userId, [task.assigneeId], 'status',
+        `任务状态变更为「${label[parsed.data.status]}」`, `「${updated.title}」`, updated.id)
     }
     // 任务完成邮件通知
     if (parsed.data.status === 'done' && prevStatus !== 'done' && task.assigneeId && task.assigneeId !== req.userId) {
@@ -297,8 +346,8 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
     taskRepo.recalcProgress(task.id)
     projectRepo.updateProgress(task.projectId)
     // 记录状态流转
+    const label: Record<string, string> = { todo: '待办', in_progress: '进行中', review: '审核中', done: '已完成' }
     if (req.userId && from !== parsed.data.status) {
-      const label: Record<string, string> = { todo: '待办', in_progress: '进行中', review: '审核中', done: '已完成' }
       try {
         commentRepo.create(task.id, req.userId, `— 将状态从「${label[from] || from}」改为「${label[parsed.data.status]}」 —`)
       } catch {
@@ -333,6 +382,9 @@ router.patch('/tasks/:taskId/status', (req: AuthRequest, res: Response, next: Ne
         }
       }
     }
+    // 项目负责人同步知会状态变更（v1.10.1，与是否指派无关，无执行者的任务同样知会）
+    notifyProjectOwner(task.projectId, req.userId, [task.assigneeId], 'status',
+      `任务状态变更为「${label[parsed.data.status]}」`, `「${task.title}」`, task.id)
     res.json({ task: taskRepo.findById(task.id)! })
   } catch (e) { next(e) }
 })
@@ -430,9 +482,11 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
     }
     // 解析 @提及 并发送通知
     const mentions = parseMentions(parsed.data.content)
+    const mentionedIds: string[] = []
     for (const name of mentions) {
       const mentioned = userRepo.findByName(name)
       if (mentioned && mentioned.id !== req.userId) {
+        mentionedIds.push(mentioned.id)
         try {
           notificationRepo.create({
             userId: mentioned.id,
@@ -448,6 +502,9 @@ router.post('/tasks/:taskId/comments', (req: AuthRequest, res: Response, next: N
         }
       }
     }
+    // 项目负责人同步知会评论动态（v1.10.1，@提及已单独通知不重复）
+    notifyProjectOwner(task.projectId, req.userId, [task.assigneeId, ...mentionedIds], 'comment',
+      '项目任务有新评论', `「${task.title}」：${parsed.data.content.slice(0, 40)}`, task.id)
     res.status(201).json({ comment })
   } catch (e) { next(e) }
 })

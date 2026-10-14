@@ -9,6 +9,17 @@ import { resolveScope } from './stats.ts'
 const router = Router()
 router.use(authRequired)
 
+// 工时登记范围（快速登记/周表共用守卫）：任务负责人 或 项目负责人 才能登记
+function assertCanLogHours(userId: string, taskId: string): void {
+  const row = db.prepare(
+    'SELECT t.assignee_id, p.owner_id FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?',
+  ).get(taskId) as SqlRow | undefined
+  if (!row) throw new ApiError(404, '任务不存在')
+  if (row.assignee_id !== userId && row.owner_id !== userId) {
+    throw new ApiError(403, '只能给自己负责的任务或自己负责的项目的任务登记工时')
+  }
+}
+
 // 默认时薪（RMB/h）：项目负责人 200 / 成员 150 / 外包 125（常量与单价解析统一在 repo.ts）
 // 生效优先级：个人时薪(u.hourly_rate) > 人员类别时薪(uc.hourly_rate) > 项目角色默认价 > 0
 // 成本口径：优先用工时登记时冻结的快照单价(th.rate_snapshot)，改价不追溯历史
@@ -41,8 +52,23 @@ router.post('/tasks/:taskId/hours', (req: AuthRequest, res: Response, next: Next
   try {
     const task = taskRepo.findById(req.params.taskId)
     if (!task) throw new ApiError(404, '任务不存在')
+    assertCanLogHours(req.userId!, task.id)
     const parsed = createSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    // 单日单任务上限：当天累计实际工时不超过任务计划工时的 20%（未设计划工时不限制）
+    // 快速登记为累加语义，需按「已有 + 本次」的当天合计校验（排除台账自动入账记录，二者独立成条）
+    const planned = task.plannedHours || 0
+    if (parsed.data.actualHours > 0 && planned > 0) {
+      const existing = db.prepare(
+        'SELECT actual_hours FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL',
+      ).get(task.id, req.userId!, parsed.data.date) as SqlRow | undefined
+      const curActual = existing ? Number(existing.actual_hours) || 0 : 0
+      const cap = Math.round(planned * 0.2 * 10) / 10
+      const total = Math.round((curActual + parsed.data.actualHours) * 10) / 10
+      if (total > cap + 1e-9) {
+        throw new ApiError(400, `「${task.title}」${parsed.data.date} 当天累计 ${total}h 超过单日上限 ${cap}h（计划工时 ${planned}h × 20%），请分摊到其他日期`)
+      }
+    }
     const record = hoursRepo.create({
       taskId: task.id,
       userId: req.userId!,
@@ -86,6 +112,151 @@ router.get('/hours/me', (req: AuthRequest, res: Response, next: NextFunction) =>
   try {
     const hours = hoursRepo.findByUser(req.userId!)
     res.json({ hours })
+  } catch (e) { next(e) }
+})
+
+// 快速登记可选项目：我负责的项目 或 我有被分配任务的项目（登录用户通用，含 admin/finance 同样受限）
+router.get('/me/loggable-projects', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const userId = req.userId!
+    const user = userRepo.findById(userId)
+    const scope = resolveScope(user, '')
+    const scopeClause = scope ? ` AND p.id IN (${scope.map(() => '?').join(',')})` : ''
+    const scopeParams = scope ? [...scope] : []
+    const rows = db.prepare(`
+      SELECT p.id, p.name, p.owner_id
+      FROM projects p
+      WHERE p.deleted_at IS NULL
+        AND (p.owner_id = ? OR EXISTS(
+          SELECT 1 FROM tasks t WHERE t.project_id = p.id AND t.assignee_id = ? AND t.deleted_at IS NULL
+        ))${scopeClause}
+      ORDER BY p.name
+    `).all(userId, userId, ...scopeParams) as SqlRow[]
+    res.json({ projects: rows.map((r) => ({ id: r.id as string, name: r.name as string, ownerId: r.owner_id as string })) })
+  } catch (e) { next(e) }
+})
+
+// 按周工时表：行 = 我负责的任务（进行中/待办 + 近 90 天有登记的已完成任务，限可见项目）；
+// 传 q（≥2 字）时按标题搜索我负责的全部任务（含历史已完成），用于把其他任务加进表格；
+// cells = 本周内已有登记（同任务同天在 repo 层保证只有一条记录）
+router.get('/me/timesheet', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const weekStart = String(req.query.weekStart || '')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw new ApiError(400, 'weekStart 格式不正确')
+    const weekEnd = new Date(Date.parse(weekStart) + 6 * 86400000).toISOString().slice(0, 10)
+    const userId = req.userId!
+    const user = userRepo.findById(userId)
+    const scope = resolveScope(user, '')
+    const scopeClause = scope ? ` AND p.id IN (${scope.map(() => '?').join(',')})` : ''
+    const scopeParams = scope ? [...scope] : []
+    const q = String(req.query.q || '').trim()
+
+    const since90 = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10)
+    let rows: SqlRow[]
+    if (q.length >= 2) {
+      // 搜索我负责的任务（含历史已完成），用于添加行
+      rows = db.prepare(`
+        SELECT t.id as task_id, t.title as task_title, t.status as task_status,
+               t.planned_hours as planned_hours, p.id as project_id, p.name as project_name
+        FROM tasks t
+        JOIN projects p ON p.id = t.project_id
+        WHERE t.deleted_at IS NULL AND t.assignee_id = ? AND t.title LIKE ?${scopeClause}
+        ORDER BY p.name, t.title
+        LIMIT 8
+      `).all(userId, `%${q}%`, ...scopeParams) as SqlRow[]
+    } else {
+      rows = db.prepare(`
+        SELECT t.id as task_id, t.title as task_title, t.status as task_status,
+               t.planned_hours as planned_hours, p.id as project_id, p.name as project_name
+        FROM tasks t
+        JOIN projects p ON p.id = t.project_id
+        WHERE t.deleted_at IS NULL AND t.assignee_id = ?${scopeClause}
+          AND (t.status != 'done' OR EXISTS(
+            SELECT 1 FROM task_hours th WHERE th.task_id = t.id AND th.user_id = ? AND th.date >= ? AND th.op_log_id IS NULL
+          ))
+        ORDER BY p.name, t.title
+      `).all(userId, userId, since90, ...scopeParams) as SqlRow[]
+    }
+
+    const cells = db.prepare(`
+      SELECT th.task_id, th.date, th.planned_hours, th.actual_hours, th.billed_hours, th.description
+      FROM task_hours th
+      JOIN tasks t ON th.task_id = t.id
+      JOIN projects p ON p.id = t.project_id
+      WHERE th.user_id = ? AND th.date >= ? AND th.date <= ? AND th.op_log_id IS NULL${scopeClause}
+    `).all(userId, weekStart, weekEnd, ...scopeParams) as SqlRow[]
+
+    res.json({
+      rows: rows.map((r) => ({
+        taskId: r.task_id, taskTitle: r.task_title, taskStatus: r.task_status,
+        plannedHours: Number(r.planned_hours) || 0,
+        projectId: r.project_id, projectName: r.project_name,
+      })),
+      cells: cells.map((c) => ({
+        taskId: c.task_id, date: c.date,
+        plannedHours: Number(c.planned_hours) || 0,
+        actualHours: Number(c.actual_hours) || 0,
+        billedHours: Number(c.billed_hours) || 0,
+        hasNote: !!c.description,
+      })),
+    })
+  } catch (e) { next(e) }
+})
+
+// 按周工时表批量提交：每格 = 该任务当天的实际工时总数（替换语义）
+// 计费工时跟随规则：原记录计费=内部时同步改为新值；用户自定义过计费比例的保持不动，避免覆盖精细数据
+const bulkSchema = z.object({
+  entries: z.array(z.object({
+    taskId: z.string().min(1),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式不正确'),
+    hours: z.number().min(0).max(24, '单日单任务不能超过 24 小时'),
+  })).max(200, '单次最多提交 200 格'),
+})
+
+router.post('/hours/bulk', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const parsed = bulkSchema.safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const userId = req.userId!
+    let created = 0, updated = 0, removed = 0, unchanged = 0
+
+    const tx = db.transaction(() => {
+      for (const entry of parsed.data.entries) {
+        const task = taskRepo.findById(entry.taskId)
+        if (!task) throw new ApiError(404, `任务不存在: ${entry.taskId}`)
+        assertCanLogHours(userId, entry.taskId)
+        // 单日单任务上限：任务计划工时的 20%（未设计划工时的任务不限制）
+        const planned = task.plannedHours || 0
+        if (entry.hours > 0 && planned > 0) {
+          const cap = Math.round(planned * 0.2 * 10) / 10
+          if (entry.hours > cap + 1e-9) {
+            throw new ApiError(400, `「${task.title}」${entry.date} 登记 ${entry.hours}h 超过单日上限 ${cap}h（计划工时 ${planned}h × 20%），请分摊到多天或调整任务计划工时`)
+          }
+        }
+        const existing = db.prepare(
+          'SELECT * FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL',
+        ).get(entry.taskId, userId, entry.date) as SqlRow | undefined
+
+        if (entry.hours <= 0) {
+          if (existing) { db.prepare('DELETE FROM task_hours WHERE id = ?').run(existing.id); removed++ }
+          else unchanged++
+          continue
+        }
+        if (!existing) {
+          hoursRepo.create({ taskId: entry.taskId, userId, date: entry.date, actualHours: entry.hours, billedHours: entry.hours, description: '' })
+          created++
+          continue
+        }
+        const curActual = Number(existing.actual_hours) || 0
+        const curBilled = Number(existing.billed_hours) || 0
+        if (curActual === entry.hours) { unchanged++; continue }
+        const newBilled = curBilled === curActual ? entry.hours : curBilled
+        db.prepare('UPDATE task_hours SET actual_hours = ?, billed_hours = ? WHERE id = ?').run(entry.hours, newBilled, existing.id)
+        updated++
+      }
+    })
+    tx()
+    res.json({ result: { created, updated, removed, unchanged } })
   } catch (e) { next(e) }
 })
 

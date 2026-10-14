@@ -11,7 +11,7 @@ import { Button, Input, Textarea } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
 import type { Task } from '../../shared/types'
 
-const STATUSES = ['待处理', '处理中', '已完成', '已关闭']
+const STATUSES = ['待处理', '处理中', '暂停', '取消', '已完成', '已关闭']
 
 /** 任务状态 → 台账状态 */
 const TASK_STATUS_MAP: Record<string, string> = {
@@ -90,7 +90,9 @@ export default function TaskToOpLogDialog({ open, task, onClose, onCreated }: Pr
         detail,
         cause,
         solution,
-        // 通过隐藏扩展字段关联来源任务
+        // 显式关联来源任务：台账工时自动入账到该任务（正式成本口径）
+        taskId: task.id,
+        // 通过隐藏扩展字段记录来源任务信息
         extraFields: {
           __sourceTaskId: task.id,
           __sourceTaskTitle: task.title,
