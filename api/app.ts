@@ -22,12 +22,15 @@ import statsRoutes from './routes/stats.ts'
 import teamRoutes from './routes/team.ts'
 import rolesRoutes from './routes/roles.ts'
 import { router as notificationRoutes } from './routes/notifications.ts'
+import { router as messageRoutes } from './routes/messages.ts'
 import templateRoutes from './routes/templates.ts'
 import { router as attachmentRoutes } from './routes/attachments.ts'
 import { router as exportRoutes } from './routes/export.ts'
 import feishuRoutes from './routes/feishu.ts'
 import backupRoutes from './routes/backup.ts'
 import { router as opLogRoutes } from './routes/opLogs.ts'
+import { router as auditRoutes } from './routes/audit.ts'
+import { auditMiddleware } from './repository/audit.ts'
 
 const app: express.Application = express()
 
@@ -47,6 +50,9 @@ app.use((req, res, next) => {
 
 // 触发数据库初始化
 import './db.ts'
+
+// 全量操作审计：所有非 GET 请求统一留痕（含登录失败/越权等异常尝试），挂在所有业务路由之前
+app.use(auditMiddleware)
 
 /**
  * health(无需鉴权)
@@ -68,12 +74,14 @@ app.use('/api/stats', statsRoutes)
 app.use('/api/team', teamRoutes)
 app.use('/api/roles', rolesRoutes)
 app.use('/api/notifications', notificationRoutes)
+app.use('/api/messages', messageRoutes)
 app.use('/api/templates', templateRoutes)
 app.use('/api/attachments', attachmentRoutes)
 app.use('/api/export', exportRoutes)
 app.use('/api/feishu', feishuRoutes)
 app.use('/api', backupRoutes)
 app.use('/api', opLogRoutes)
+app.use('/api/audit', auditRoutes)
 
 /**
  * 统一错误处理

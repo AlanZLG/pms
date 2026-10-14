@@ -19,6 +19,8 @@ import {
   Layers,
   Shield,
   ClipboardList,
+  ScrollText,
+  Clock,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAppStore } from '@/stores/app'
@@ -27,6 +29,7 @@ import { useTheme } from '@/hooks/useTheme'
 import { Avatar } from '@/components/ui'
 import NotificationDropdown from '@/components/NotificationDropdown'
 import GlobalSearch from '@/components/GlobalSearch'
+import HoursLogDialog from '@/components/HoursLogDialog'
 
 const navItems = [
   { to: '/', label: '仪表板', icon: LayoutDashboard, end: true },
@@ -43,11 +46,14 @@ const navItems = [
 const adminNavItems = [
   { to: '/templates', label: '项目模板', icon: Layers },
   { to: '/roles', label: '角色管理', icon: Shield },
+  { to: '/audit', label: '操作日志', icon: ScrollText },
 ]
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  // 全局快捷记工时
+  const [hoursOpen, setHoursOpen] = useState(false)
   const user = useAppStore((s) => s.user)
   const logout = useAppStore((s) => s.logout)
   const nav = useNavigate()
@@ -108,6 +114,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           </button>
 
           <div className="ml-auto flex items-center gap-3">
+            <button
+              onClick={() => setHoursOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-brand px-3.5 py-1.5 text-sm font-semibold text-white shadow-md transition hover:bg-brand/90"
+              title="快捷登记工时"
+            >
+              <Clock className="h-4 w-4" />
+              <span className="hidden sm:inline">记工时</span>
+            </button>
             <GlobalSearch />
             <button
               onClick={toggleTheme}
@@ -144,6 +158,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </header>
 
         <main className="flex-1 overflow-auto px-4 py-6 md:px-8">{children}</main>
+
+        {/* 全局快捷记工时弹窗 */}
+        <HoursLogDialog
+          open={hoursOpen}
+          onClose={() => setHoursOpen(false)}
+        />
       </div>
     </div>
   )

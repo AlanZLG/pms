@@ -7,6 +7,7 @@ import { useAppStore } from '@/stores/app'
 import AppLayout from '@/components/AppLayout'
 import Toaster from '@/components/Toaster'
 import ErrorBoundary from '@/components/ErrorBoundary'
+import ForceChangePasswordModal from '@/components/ForceChangePasswordModal'
 import { getToken } from '@/lib/api'
 
 import Login from '@/pages/Login'
@@ -23,6 +24,7 @@ import Templates from '@/pages/Templates'
 const Stats = lazy(() => import('@/pages/Stats'))
 const HoursReport = lazy(() => import('@/pages/HoursReport'))
 const OpLogs = lazy(() => import('@/pages/OpLogs'))
+const AuditLogs = lazy(() => import('@/pages/AuditLogs'))
 
 function PageFallback() {
   return (
@@ -130,6 +132,16 @@ export default function App() {
                         </ErrorBoundary>
                       }
                     />
+                    <Route
+                      path="/audit"
+                      element={
+                        <ErrorBoundary>
+                          <Suspense fallback={<PageFallback />}>
+                            <AuditLogs />
+                          </Suspense>
+                        </ErrorBoundary>
+                      }
+                    />
                     <Route path="/notifications" element={<Notifications />} />
                     <Route path="/trash" element={<Trash />} />
                     <Route path="/templates" element={<Templates />} />
@@ -144,6 +156,8 @@ export default function App() {
           />
         </Routes>
         <Toaster />
+        {/* 新建账号首次登录强制改密，改完前遮罩整个系统 */}
+        {user?.mustChangePassword && <ForceChangePasswordModal />}
       </Router>
     </ErrorBoundary>
   )

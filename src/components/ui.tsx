@@ -98,17 +98,20 @@ export function Button({
 }
 
 // 输入框
-export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={cn(
-        'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
-        props.className,
-      )}
-    />
-  )
-}
+export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
+  function Input(props, ref) {
+    return (
+      <input
+        {...props}
+        ref={ref}
+        className={cn(
+          'w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary placeholder:text-muted/70 outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/30',
+          props.className,
+        )}
+      />
+    )
+  }
+)
 
 export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
   function Textarea(props, ref) {
