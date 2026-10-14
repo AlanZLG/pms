@@ -9,8 +9,8 @@ import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo,
 import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.ts'
 import { pushFeishuNotification } from '../lib/notifier.ts'
 import { ApiError } from '../lib/utils.ts'
-import { normalizeProjectType } from '../../shared/types.ts'
-import type { Project, ProjectStatus, MemberRole, User } from '../../shared/types.ts'
+import { normalizeProjectType, OP_LOG_MAX_EXTRA_COLUMNS } from '../../shared/types.ts'
+import type { Project, ProjectStatus, MemberRole, User, OpLogExtraConfig } from '../../shared/types.ts'
 
 const router = Router()
 router.use(authRequired)
@@ -206,6 +206,55 @@ router.patch('/:projectId', (req: AuthRequest, res: Response, next: NextFunction
       ...(projectType !== undefined ? { projectType: normalizeProjectType(projectType) } : {}),
     })
     projectRepo.updateProgress(project.id)
+    res.json({ project: projectRepo.findById(project.id)! })
+  } catch (e) { next(e) }
+})
+
+// 修改项目序号：插入式顺延（占用目标序号时受影响项目整体平移）；仅项目负责人或管理员
+router.patch('/:projectId/seq', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    if (project.ownerId !== req.userId && userRepo.findById(req.userId!)?.role !== 'admin') {
+      throw new ApiError(403, '仅项目负责人或管理员可修改项目序号')
+    }
+    const parsed = z.object({ seq: z.number().int('序号必须是整数').min(1, '序号最小为 1') }).safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const oldSeq = project.seq
+    const newSeq = projectRepo.setSeq(project.id, parsed.data.seq)
+    if (oldSeq !== newSeq) {
+      activityLogRepo.create(project.id, req.userId!, 'seq_change', `项目序号: ${oldSeq ?? '无'} → ${newSeq}`)
+    }
+    res.json({ project: projectRepo.findById(project.id)! })
+  } catch (e) { next(e) }
+})
+
+// 配置项目台账自定义列：定义名称与顺序，启用后台账展示/表单/Excel 导入导出均按此执行；仅项目负责人或管理员
+router.put('/:projectId/oplog-columns', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const project = projectRepo.findById(req.params.projectId)
+    if (!project) throw new ApiError(404, '项目不存在')
+    if (project.ownerId !== req.userId && userRepo.findById(req.userId!)?.role !== 'admin') {
+      throw new ApiError(403, '仅项目负责人或管理员可配置台账自定义列')
+    }
+    const parsed = z.object({
+      enabled: z.boolean(),
+      columns: z.array(z.object({
+        key: z.string().min(1, '字段键不能为空').max(64, '字段键过长'),
+        label: z.string().trim().min(1, '列名不能为空').max(50, '列名过长（最多 50 字）'),
+      })).max(OP_LOG_MAX_EXTRA_COLUMNS, `自定义列最多 ${OP_LOG_MAX_EXTRA_COLUMNS} 个`),
+    }).safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const { enabled, columns } = parsed.data
+    if (enabled && columns.length === 0) throw new ApiError(400, '启用自定义列时至少定义 1 列')
+    const labels = columns.map((c) => c.label)
+    if (new Set(labels).size !== labels.length) throw new ApiError(400, '自定义列名称不能重复')
+    const keys = columns.map((c) => c.key)
+    if (new Set(keys).size !== keys.length) throw new ApiError(400, '自定义列字段键重复，请刷新后重试')
+    const payload: OpLogExtraConfig = { enabled, columns: columns.map((c) => ({ key: c.key, label: c.label })) }
+    projectRepo.setOplogColumns(project.id, payload)
+    activityLogRepo.create(project.id, req.userId!, 'oplog_columns',
+      enabled ? `配置台账自定义列（${columns.length} 列）` : '停用台账自定义列')
     res.json({ project: projectRepo.findById(project.id)! })
   } catch (e) { next(e) }
 })

@@ -2,13 +2,15 @@
 
 import type {
   User, Project, Task, Comment, Subtask, AuthResponse, Notification,
-  StatsOverview, BurndownData, WorkloadItem, Template, Attachment,
+  StatsOverview, BurndownData, WorkloadItem, ProjectHealth, Template, Attachment,
   TaskHours, ProjectBudget, ProjectExpense, BudgetCategory, BudgetWithProject,
   HoursByUserProject, ProjectCostSummary, UserCategory, TaskDependency, TaskHistory,
   SavedFilter, TaskFilter, SearchResult, KanbanColumn, KanbanColumnInput,
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
   CustomRole, PermissionCategory,
-  OpLog, OpLogInput, OpLogFilter, OpLogOptions, OpLogStat,
+  Message, MessageThread,
+  AuditLog, AuditQuery,
+  OpLog, OpLogInput, OpLogFilter, OpLogOptions, OpLogStat, OpLogExtraConfig,
   OpLogAiAnalyzeRequest, OpLogAiAnalyzeResponse, OpLogAiAnalysis, OpLogAiCase, OpLogAiStatus,
   AiChatRequest,
 } from '../../shared/types'
@@ -90,15 +92,24 @@ export const api = {
   updateProfile: (data: { name: string; avatarColor?: string }) =>
     request<{ user: User }>('/api/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
   changePassword: (data: { currentPassword: string; newPassword: string }) =>
-    request<{ success: boolean }>('/api/auth/me/password', { method: 'PUT', body: JSON.stringify(data) }),
+    request<{ success: boolean; token?: string }>('/api/auth/me/password', { method: 'PUT', body: JSON.stringify(data) }),
 
   // projects
   listProjects: () => request<{ projects: Project[] }>('/api/projects'),
+  // 快速登记可选项目：我负责的 或 有我被分配任务的项目
+  listLoggableProjects: () =>
+    request<{ projects: Array<Pick<Project, 'id' | 'name' | 'ownerId'>> }>('/api/me/loggable-projects'),
   getProject: (id: string) => request<{ project: Project }>(`/api/projects/${id}`),
   createProject: (data: Partial<Project>) =>
     request<{ project: Project }>('/api/projects', { method: 'POST', body: JSON.stringify(data) }),
   updateProject: (id: string, data: Partial<Project>) =>
     request<{ project: Project }>(`/api/projects/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  // 修改项目序号：插入式顺延（占用目标序号时受影响项目整体平移）
+  updateProjectSeq: (id: string, seq: number) =>
+    request<{ project: Project }>(`/api/projects/${id}/seq`, { method: 'PATCH', body: JSON.stringify({ seq }) }),
+  // 配置项目台账自定义列：启用后台账展示/表单/导入导出按定义的字段与顺序执行
+  updateProjectOplogColumns: (id: string, config: OpLogExtraConfig) =>
+    request<{ project: Project }>(`/api/projects/${id}/oplog-columns`, { method: 'PUT', body: JSON.stringify(config) }),
   // 管理员指派项目负责人
   transferOwnership: (id: string, userId: string) =>
     request<{ project: Project }>(`/api/projects/${id}/owner`, { method: 'PATCH', body: JSON.stringify({ userId }) }),
@@ -281,6 +292,8 @@ export const api = {
     const qs = [projectId ? `projectId=${projectId}` : '', days ? `days=${days}` : ''].filter(Boolean).join('&')
     return request<{ workload: WorkloadItem[] }>(`/api/stats/workload${qs ? `?${qs}` : ''}`)
   },
+  statsHealth: (projectId?: string) =>
+    request<{ health: ProjectHealth[] }>(`/api/stats/health${projectId ? `?projectId=${projectId}` : ''}`),
 
   // team
   listUsers: () => request<{ users: (User & { taskCount: number; activeCount: number })[]; limited?: boolean }>('/api/team'),
@@ -316,6 +329,15 @@ export const api = {
     request<{ record: TaskHours }>(`/api/hours/${recordId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTaskHours: (recordId: string) =>
     request<{ ok: boolean }>(`/api/hours/${recordId}`, { method: 'DELETE' }),
+  // 按周工时表：rows = 我负责的任务行（q=搜索我负责的其他任务），cells = 本周已有登记
+  myTimesheet: (weekStart: string, q?: string) =>
+    request<{
+      rows: { taskId: string; taskTitle: string; taskStatus: string; plannedHours: number; projectId: string; projectName: string }[]
+      cells: { taskId: string; date: string; plannedHours: number; actualHours: number; billedHours: number; hasNote: boolean }[]
+    }>(`/api/me/timesheet?weekStart=${weekStart}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
+  // 批量提交周表：每格 hours=0 表示清除该任务当天登记
+  bulkHours: (entries: { taskId: string; date: string; hours: number }[]) =>
+    request<{ result: { created: number; updated: number; removed: number; unchanged: number } }>('/api/hours/bulk', { method: 'POST', body: JSON.stringify({ entries }) }),
   // 工时报表：服务端按项目/人员/日期过滤，并返回任务计划工时汇总与按天基线
   listStatsHours: (projectId?: string, userId?: string, startDate?: string, endDate?: string) => {
     const params: string[] = []
@@ -486,6 +508,35 @@ export const api = {
   deleteNotification: (id: string) =>
     request<{ ok: boolean }>(`/api/notifications/${id}`, { method: 'DELETE' }),
 
+  // messages（站内消息）
+  listMessageThreads: () =>
+    request<{ threads: MessageThread[]; unread: number }>('/api/messages'),
+  listThreadMessages: (peerId: string, taskId?: string | null, projectId?: string | null) => {
+    const qs = new URLSearchParams({ peerId })
+    if (taskId) qs.set('taskId', taskId)
+    if (projectId) qs.set('projectId', projectId)
+    return request<{ messages: Message[] }>(`/api/messages/thread?${qs.toString()}`)
+  },
+  sendMessage: (data: { recipientId: string; content: string; taskId?: string | null; projectId?: string | null }) =>
+    request<{ message: Message }>('/api/messages', { method: 'POST', body: JSON.stringify(data) }),
+  markThreadRead: (peerId: string, taskId?: string | null, projectId?: string | null) =>
+    request<{ ok: boolean }>('/api/messages/thread/read', {
+      method: 'POST',
+      body: JSON.stringify({ peerId, taskId: taskId || null, projectId: projectId || null }),
+    }),
+  messageUnread: () => request<{ unread: number }>('/api/messages/unread'),
+
+  // 操作审计（管理员）
+  listAuditLogs: (q: AuditQuery) => {
+    const params = new URLSearchParams()
+    Object.entries(q).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== '') params.set(k, String(v))
+    })
+    const qs = params.toString()
+    return request<{ rows: AuditLog[]; total: number }>(`/api/audit${qs ? `?${qs}` : ''}`)
+  },
+  auditStats: () => request<{ rows: { module: string; count: number }[] }>('/api/audit/stats'),
+
   // feishu
   getFeishuBindUrl: () =>
     request<{ authUrl: string }>('/api/feishu/bind'),
@@ -655,6 +706,7 @@ export const api = {
     fieldWarnings: string[]
     fieldWarningCount: number
     unknownColumns?: string[]
+    missingColumns?: string[]
   }> => {
     const formData = new FormData()
     formData.append('file', file)
@@ -690,6 +742,7 @@ export const api = {
     dupRows: { row: number; problem: string; logDate: string }[]
     fieldWarningCount: number
     unknownColumns?: string[]
+    missingColumns?: string[]
     skipped: number
     errors: string[]
   }> => {
@@ -747,11 +800,11 @@ export const api = {
     URL.revokeObjectURL(a.href)
   },
 
-  // 台账导入模板下载
-  downloadOpLogTemplate: async (): Promise<void> => {
+  // 台账导入模板下载（指定项目且启用自定义列配置时，模板按项目定义生成自定义列区）
+  downloadOpLogTemplate: async (projectId?: string): Promise<void> => {
     const token = getToken()
     if (!token) throw new Error('未登录')
-    const res = await fetch('/api/op-logs/template.xlsx', {
+    const res = await fetch(`/api/op-logs/template.xlsx${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (!res.ok) throw new Error(`下载失败(${res.status})`)

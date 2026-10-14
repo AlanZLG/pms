@@ -24,6 +24,7 @@ export function createTestDb(): Database.Database {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       category_id TEXT,
       token_version INTEGER NOT NULL DEFAULT 0,
+      must_change_password INTEGER NOT NULL DEFAULT 0,
       feishu_open_id TEXT,
       feishu_union_id TEXT,
       feishu_bound_at DATETIME,
@@ -38,13 +39,18 @@ export function createTestDb(): Database.Database {
       name TEXT NOT NULL,
       description TEXT,
       status TEXT NOT NULL CHECK(status IN ('planning','active','completed','archived')),
+      project_type TEXT,
       owner_id TEXT NOT NULL REFERENCES users(id),
       progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
       start_date DATETIME,
       due_date DATETIME,
+      seq INTEGER,
+      oplog_extra_columns TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       deleted_at DATETIME
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_seq ON projects(seq) WHERE seq IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS project_members (
       id TEXT PRIMARY KEY,
@@ -89,8 +95,9 @@ export function createTestDb(): Database.Database {
       id TEXT PRIMARY KEY,
       project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
       user_id TEXT NOT NULL,
+      seq INTEGER,
       category TEXT NOT NULL DEFAULT '其他',
-      status TEXT NOT NULL DEFAULT '待处理' CHECK(status IN ('待处理','处理中','已完成','已关闭')),
+      status TEXT NOT NULL DEFAULT '待处理' CHECK(status IN ('待处理','处理中','暂停','取消','已完成','已关闭')),
       proposer TEXT,
       system TEXT,
       department TEXT,
@@ -103,7 +110,9 @@ export function createTestDb(): Database.Database {
       cause TEXT,
       solution TEXT,
       extra_fields TEXT NOT NULL DEFAULT '{}',
+      task_id TEXT,
       deleted_at DATETIME,
+      deleted_by TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -132,6 +141,32 @@ export function createTestDb(): Database.Database {
       task_id TEXT,
       project_id TEXT,
       read INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      project_id TEXT,
+      task_id TEXT,
+      content TEXT NOT NULL,
+      read INTEGER NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      user_name TEXT NOT NULL DEFAULT '未登录',
+      method TEXT NOT NULL,
+      path TEXT NOT NULL,
+      module TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_id TEXT,
+      status_code INTEGER NOT NULL,
+      detail TEXT,
+      ip TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -182,6 +217,7 @@ export function createTestDb(): Database.Database {
       description TEXT,
       rate_snapshot DECIMAL(10,2),
       rate_source TEXT,
+      op_log_id TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -280,6 +316,21 @@ export function seedSubtask(db: Database.Database, taskId: string, opts: { id?: 
   db.prepare(
     'INSERT INTO subtasks (id, task_id, title, done, sort_order, created_at) VALUES (?,?,?,?,?,?)',
   ).run(id, taskId, opts.title || '子任务', opts.done ? 1 : 0, 0, new Date().toISOString())
+  return id
+}
+
+/** 插入测试站内消息（可显式指定 created_at 便于排序断言），返回 messageId */
+export function seedMessage(
+  db: Database.Database,
+  opts: { id?: string; senderId: string; recipientId: string; projectId?: string | null; taskId?: string | null; content: string; read?: boolean; createdAt?: string },
+): string {
+  const id = opts.id || genId()
+  db.prepare(
+    'INSERT INTO messages (id, sender_id, recipient_id, project_id, task_id, content, read, created_at) VALUES (?,?,?,?,?,?,?,?)',
+  ).run(
+    id, opts.senderId, opts.recipientId, opts.projectId ?? null, opts.taskId ?? null,
+    opts.content, opts.read ? 1 : 0, opts.createdAt || new Date().toISOString(),
+  )
   return id
 }
 

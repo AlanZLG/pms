@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS projects (
   start_date DATETIME,
   due_date DATETIME,
   total_budget DECIMAL(12,2),
+  seq INTEGER,
+  oplog_extra_columns TEXT,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   deleted_at DATETIME
 );
@@ -121,6 +123,17 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  recipient_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  project_id TEXT,
+  task_id TEXT,
+  content TEXT NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -129,6 +142,27 @@ CREATE INDEX IF NOT EXISTS idx_comments_task ON comments(task_id);
 CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks(task_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
+CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+
+-- 全量操作审计（v1.10.0）：所有非 GET 请求统一留痕，账号操作轨迹可查、可按模块/动作分类管理
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  user_name TEXT NOT NULL DEFAULT '未登录',
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  module TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target_id TEXT,
+  status_code INTEGER NOT NULL,
+  detail TEXT,
+  ip TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_audit_module ON audit_logs(module, action);
 
 CREATE TABLE IF NOT EXISTS templates (
   id TEXT PRIMARY KEY,
@@ -615,8 +649,9 @@ CREATE TABLE IF NOT EXISTS op_logs (
   id TEXT PRIMARY KEY,
   project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
   user_id TEXT NOT NULL REFERENCES users(id),
+  seq INTEGER,
   category TEXT NOT NULL DEFAULT '其他',
-  status TEXT NOT NULL DEFAULT '待处理' CHECK(status IN ('待处理','处理中','已完成','已关闭')),
+  status TEXT NOT NULL DEFAULT '待处理' CHECK(status IN ('待处理','处理中','暂停','取消','已完成','已关闭')),
   proposer TEXT,
   system TEXT,
   department TEXT,
@@ -1227,6 +1262,121 @@ try {
   if (added) console.log('[db] 已添加项目删除审批字段到 projects 表')
 } catch (e) {
   console.error('[db] 添加项目删除审批字段失败:', e)
+}
+
+// 项目序号（全局唯一、软删不复用）：存量项目按创建时间回填
+try {
+  const cols = (db.pragma('table_info(projects)') as { name: string }[]).map(c => c.name)
+  if (!cols.includes('seq')) {
+    db.exec('ALTER TABLE projects ADD COLUMN seq INTEGER')
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_seq ON projects(seq) WHERE seq IS NOT NULL')
+    // 回填：按创建时间先后编号（同毫秒按 id 兜底稳定排序）
+    db.exec(`UPDATE projects SET seq = (
+      SELECT COUNT(*) + 1 FROM projects p2
+      WHERE p2.created_at < projects.created_at
+         OR (p2.created_at = projects.created_at AND p2.id < projects.id)
+    )`)
+    console.log('[db] 已添加项目序号字段并按创建时间回填')
+  }
+  // 台账自定义列配置（项目级 JSON：{enabled, columns:[{key,label}]}；null = 未配置走动态列）
+  if (!cols.includes('oplog_extra_columns')) {
+    db.exec('ALTER TABLE projects ADD COLUMN oplog_extra_columns TEXT')
+    console.log('[db] 已添加项目台账自定义列配置字段')
+  }
+} catch (e) {
+  console.error('[db] 添加 projects.seq 字段失败:', e)
+}
+
+// 强制新账号首次登录修改密码的标记
+try {
+  const cols = (db.pragma('table_info(users)') as { name: string }[]).map(c => c.name)
+  if (!cols.includes('must_change_password')) {
+    db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0')
+    console.log('[db] 已添加 must_change_password 字段到 users 表')
+  }
+} catch (e) {
+  console.error('[db] 添加 users.must_change_password 字段失败:', e)
+}
+
+// 台账工时入账（v1.9.4）：台账关联任务 + 工时记录反指台账（台账为录入入口，工时自动落到任务）
+try {
+  const cols = (db.pragma('table_info(op_logs)') as { name: string }[]).map(c => c.name)
+  if (!cols.includes('task_id')) {
+    db.exec('ALTER TABLE op_logs ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL')
+    console.log('[db] 已添加 task_id 字段到 op_logs 表')
+  }
+} catch (e) {
+  console.error('[db] 添加 op_logs.task_id 字段失败:', e)
+}
+// 台账删除审计（v1.10.0）：记录删除人，软删数据可追责
+try {
+  const cols = (db.pragma('table_info(op_logs)') as { name: string }[]).map(c => c.name)
+  if (!cols.includes('deleted_by')) {
+    db.exec('ALTER TABLE op_logs ADD COLUMN deleted_by TEXT REFERENCES users(id)')
+    console.log('[db] 已添加 deleted_by 字段到 op_logs 表')
+  }
+} catch (e) {
+  console.error('[db] 添加 op_logs.deleted_by 字段失败:', e)
+}
+// 台账 v1.11：状态新增「暂停/取消」（CHECK 约束无法 ALTER，需重建表）+ 序号 seq（项目内自增，历史数据按创建顺序回填）
+try {
+  const ddl = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='op_logs'").get() as { sql?: string } | undefined)?.sql || ''
+  if (ddl && !ddl.includes("'暂停'")) {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS op_logs_new;
+      CREATE TABLE op_logs_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE SET NULL,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        seq INTEGER,
+        category TEXT NOT NULL DEFAULT '其他',
+        status TEXT NOT NULL DEFAULT '待处理' CHECK(status IN ('待处理','处理中','暂停','取消','已完成','已关闭')),
+        proposer TEXT,
+        system TEXT,
+        department TEXT,
+        log_date TEXT NOT NULL,
+        recorder TEXT,
+        problem TEXT NOT NULL,
+        completion_date TEXT,
+        hours REAL NOT NULL DEFAULT 0,
+        detail TEXT,
+        cause TEXT,
+        solution TEXT,
+        extra_fields TEXT NOT NULL DEFAULT '{}',
+        task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        deleted_at DATETIME,
+        deleted_by TEXT REFERENCES users(id),
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO op_logs_new (id, project_id, user_id, seq, category, status, proposer, system, department, log_date, recorder, problem, completion_date, hours, detail, cause, solution, extra_fields, task_id, deleted_at, deleted_by, created_at, updated_at)
+        SELECT id, project_id, user_id,
+          ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY created_at, rowid),
+          category, status, proposer, system, department, log_date, recorder, problem, completion_date, hours, detail, cause, solution, extra_fields, task_id, deleted_at, deleted_by, created_at, updated_at
+        FROM op_logs;
+      DROP TABLE op_logs;
+      ALTER TABLE op_logs_new RENAME TO op_logs;
+      CREATE INDEX IF NOT EXISTS idx_oplogs_project ON op_logs(project_id);
+      CREATE INDEX IF NOT EXISTS idx_oplogs_user ON op_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_oplogs_date ON op_logs(log_date);
+      CREATE INDEX IF NOT EXISTS idx_oplogs_category ON op_logs(category);
+      CREATE INDEX IF NOT EXISTS idx_oplogs_status ON op_logs(status);
+      PRAGMA foreign_keys = ON;
+    `)
+    console.log('[db] 已重建 op_logs 表：状态新增暂停/取消 + seq 序号回填')
+  }
+} catch (e) {
+  console.error('[db] 重建 op_logs 表失败:', e)
+}
+try {
+  const cols = (db.pragma('table_info(task_hours)') as { name: string }[]).map(c => c.name)
+  if (!cols.includes('op_log_id')) {
+    db.exec('ALTER TABLE task_hours ADD COLUMN op_log_id TEXT')
+    console.log('[db] 已添加 op_log_id 字段到 task_hours 表')
+  }
+} catch (e) {
+  console.error('[db] 添加 task_hours.op_log_id 字段失败:', e)
 }
 
 // 数据库维护：WAL checkpoint + 可选 VACUUM

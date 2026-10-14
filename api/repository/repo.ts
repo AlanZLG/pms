@@ -1,7 +1,7 @@
 // 数据访问层
 
 import db, { type SqlRow, type SqlParam } from '../db.ts'
-import { genId, parseLabels } from '../lib/utils.ts'
+import { genId, parseLabels, ApiError } from '../lib/utils.ts'
 import { rankRecallHits, type RecallHit } from '../lib/recall.ts'
 import type {
   User, Project, ProjectMember, Task, Comment, Subtask, Notification, Template, Attachment, TaskStatus,
@@ -9,6 +9,7 @@ import type {
   UserCategory, TaskDependency, TaskHistory, SavedFilter, TaskFilter, KanbanColumn,
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
   CustomRole, Permission, PermissionCategory, OpLog,
+  Message, MessageThread, OpLogExtraConfig,
 } from '../../shared/types.ts'
 import type { ProjectType, TemplateCategory } from '../../shared/types.ts'
 
@@ -33,7 +34,8 @@ export const userRepo = {
   create(data: { email: string; passwordHash: string; name: string; avatarColor: string; role: string }): User {
     const id = genId()
     db.prepare(
-      'INSERT INTO users (id, email, password_hash, name, avatar_color, role, created_at) VALUES (?,?,?,?,?,?,?)',
+      // 新建账号一律要求首次登录改密
+      'INSERT INTO users (id, email, password_hash, name, avatar_color, role, created_at, must_change_password) VALUES (?,?,?,?,?,?,?,1)',
     ).run(id, data.email, data.passwordHash, data.name, data.avatarColor, data.role, new Date().toISOString())
     return this.findById(id)!
   },
@@ -66,7 +68,8 @@ export const userRepo = {
     return this.findById(id)
   },
   updatePassword(id: string, passwordHash: string): void {
-    db.prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(passwordHash, id)
+    // 改密后清除强制改密标记，并使旧 token 失效
+    db.prepare('UPDATE users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1 WHERE id = ?').run(passwordHash, id)
   },
   getTokenVersion(id: string): number {
     const row = db.prepare('SELECT token_version FROM users WHERE id = ?').get(id) as { token_version: number } | undefined
@@ -243,16 +246,68 @@ export const projectRepo = {
     })
     return tx()
   },
-  create(data: { name: string; description: string; status: ProjectStatus; ownerId: string; startDate?: string | null; dueDate: string | null; projectType?: ProjectType | null }): Project {
+  create(data: { name: string; description: string; status: ProjectStatus; ownerId: string; startDate?: string | null; dueDate: string | null; projectType?: ProjectType | null; seq?: number | null }): Project {
     const id = genId()
     const progress = data.startDate ? this.calculateTimeProgress(data.startDate) : 0
+    // 序号：显式指定（导入场景）优先，否则全局自增；含软删行，保证序号永不复用
+    let seq: number
+    if (typeof data.seq === 'number' && Number.isFinite(data.seq) && data.seq >= 1) {
+      seq = Math.floor(data.seq)
+      const dup = db.prepare('SELECT id FROM projects WHERE seq = ?').get(seq)
+      if (dup) throw new ApiError(409, `序号 ${seq} 已被其他项目占用`)
+    } else {
+      const maxRow = db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM projects').get() as { m: number }
+      seq = (maxRow.m || 0) + 1
+    }
     db.prepare(
-      'INSERT INTO projects (id, name, description, status, project_type, owner_id, progress, start_date, due_date, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)',
-    ).run(id, data.name, data.description, data.status, data.projectType || null, data.ownerId, progress, data.startDate || null, data.dueDate, new Date().toISOString())
+      'INSERT INTO projects (id, name, description, status, project_type, owner_id, progress, start_date, due_date, seq, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    ).run(id, data.name, data.description, data.status, data.projectType || null, data.ownerId, progress, data.startDate || null, data.dueDate, seq, new Date().toISOString())
     db.prepare(
       'INSERT INTO project_members (id, project_id, user_id, role, joined_at) VALUES (?,?,?,?,?)',
     ).run(genId(), id, data.ownerId, 'owner', new Date().toISOString())
     return this.findById(id)!
+  },
+  /**
+   * 指定序号（插入式顺延）：占用目标序号时，受影响区间整体平移。
+   * 右移目标超过当前最大序号时收敛为最大序号，保证全局连续无空洞。
+   * 事务内先摘下自身再按序更新，规避唯一索引冲突。
+   */
+  setSeq(id: string, target: number): number {
+    const tx = db.transaction((): number => {
+      const row = db.prepare('SELECT seq FROM projects WHERE id = ?').get(id) as { seq: number | null } | undefined
+      if (!row) throw new ApiError(404, '项目不存在')
+      const old = row.seq
+      const maxRow = db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM projects').get() as { m: number }
+      const maxSeq = maxRow.m || 0
+      // 收敛目标：已有序号的项目最多移到当前最大序号；无序号项目最多追加到最大序号 + 1
+      const seq = old !== null && old !== undefined ? Math.min(Math.max(1, Math.floor(target)), maxSeq) : Math.min(Math.max(1, Math.floor(target)), maxSeq + 1)
+      if (old === seq) return seq
+      db.prepare('UPDATE projects SET seq = NULL WHERE id = ?').run(id)
+      if (old !== null && old !== undefined) {
+        if (seq < old) {
+          // 前插：[seq, old) 整体 +1（倒序更新避免唯一索引冲突）
+          const rows = db.prepare('SELECT id FROM projects WHERE seq IS NOT NULL AND seq >= ? AND seq < ? ORDER BY seq DESC').all(seq, old) as { id: string }[]
+          for (const r of rows) db.prepare('UPDATE projects SET seq = seq + 1 WHERE id = ?').run(r.id)
+        } else {
+          // 后移：(old, seq] 整体 -1（正序更新避免唯一索引冲突）
+          const rows = db.prepare('SELECT id FROM projects WHERE seq IS NOT NULL AND seq > ? AND seq <= ? ORDER BY seq ASC').all(old, seq) as { id: string }[]
+          for (const r of rows) db.prepare('UPDATE projects SET seq = seq - 1 WHERE id = ?').run(r.id)
+        }
+      } else {
+        // 历史无序号的项目新设序号：[seq, +∞) 整体 +1
+        const rows = db.prepare('SELECT id FROM projects WHERE seq IS NOT NULL AND seq >= ? ORDER BY seq DESC').all(seq) as { id: string }[]
+        for (const r of rows) db.prepare('UPDATE projects SET seq = seq + 1 WHERE id = ?').run(r.id)
+      }
+      db.prepare('UPDATE projects SET seq = ? WHERE id = ?').run(seq, id)
+      return seq
+    })
+    return tx()
+  },
+  /** 保存项目台账自定义列配置（校验在路由层完成；repo 仅持久化） */
+  setOplogColumns(id: string, config: OpLogExtraConfig): void {
+    const row = db.prepare('SELECT id FROM projects WHERE id = ?').get(id)
+    if (!row) throw new ApiError(404, '项目不存在')
+    db.prepare('UPDATE projects SET oplog_extra_columns = ? WHERE id = ?').run(JSON.stringify(config), id)
   },
   update(id: string, data: Partial<{ name: string; description: string; status: ProjectStatus; startDate: string | null; dueDate: string | null; projectType: ProjectType | null; totalBudget: number | null }>): void {
     const fields: string[] = []
@@ -566,26 +621,40 @@ export const taskRepo = {
   },
   trendDaily(days = 14, projectIds?: string[]): { date: string; completed: number; created: number }[] {
     if (projectIds && projectIds.length === 0) return []
-    const since = new Date(Date.now() - days * 86400000).toISOString()
-    const projectWhere = projectIds?.length ? ` AND project_id IN (${projectIds.map(() => '?').join(',')})` : ''
-    const projectParams = projectIds?.length ? projectIds : []
-    const createdRows = db.prepare(`
-      SELECT DATE(created_at) as d, COUNT(*) as c FROM tasks
-      WHERE created_at >= ? AND deleted_at IS NULL${projectWhere}
-      GROUP BY d ORDER BY d
-    `).all(since, ...projectParams) as { d: string; c: number }[]
-    const doneRows = db.prepare(`
-      SELECT DATE(updated_at) as d, COUNT(*) as c FROM tasks
-      WHERE status = 'done' AND updated_at >= ? AND deleted_at IS NULL${projectWhere}
-      GROUP BY d ORDER BY d
-    `).all(since, ...projectParams) as { d: string; c: number }[]
-    const map: Record<string, { completed: number; created: number }> = {}
-    createdRows.forEach((r) => { map[r.d] = { completed: 0, created: r.c } })
-    doneRows.forEach((r) => {
-      if (!map[r.d]) map[r.d] = { completed: 0, created: 0 }
-      map[r.d].completed = r.c
-    })
-    return Object.entries(map).sort((a, b) => a[0].localeCompare(b[0])).map(([date, v]) => ({ date, ...v }))
+    const n = Math.max(1, Math.min(days, 90))
+    const ph = projectIds?.length ? ` AND project_id IN (${projectIds.map(() => '?').join(',')})` : ''
+    const rows = db.prepare(
+      `SELECT created_at, updated_at, status FROM tasks WHERE deleted_at IS NULL${ph}`,
+    ).all(...(projectIds?.length ? projectIds : [])) as SqlRow[]
+    // 固定返回最近 N 个自然日（含今天）的连续日期轴，无数据补 0：
+    // 旧实现按有记录的日期稀疏返回，X 轴会跳变，趋势失真
+    const today0 = new Date(); today0.setHours(0, 0, 0, 0)
+    const start0 = new Date(today0.getTime() - (n - 1) * 86400000)
+    const end0 = today0.getTime() + 86400000
+    // 按本地时区自然日归桶：created_at 是 UTC 时间戳，SQL DATE() 会截成 UTC 日，
+    // 北京 0~8 点的操作会被记到前一天，这里统一在 JS 侧归本地日
+    const dayKey = (ts: number) => {
+      const d = new Date(ts)
+      return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`
+    }
+    const createdMap = new Map<string, number>()
+    const completedMap = new Map<string, number>()
+    for (const t of rows) {
+      const cTs = new Date(t.created_at).getTime()
+      if (cTs >= start0.getTime() && cTs < end0) createdMap.set(dayKey(cTs), (createdMap.get(dayKey(cTs)) || 0) + 1)
+      if (t.status === 'done') {
+        const dTs = new Date(t.updated_at).getTime()
+        if (dTs >= start0.getTime() && dTs < end0) completedMap.set(dayKey(dTs), (completedMap.get(dayKey(dTs)) || 0) + 1)
+      }
+    }
+    const out: { date: string; completed: number; created: number }[] = []
+    const cursor = new Date(start0)
+    for (let i = 0; i < n; i++) {
+      const key = dayKey(cursor.getTime())
+      out.push({ date: key, created: createdMap.get(key) || 0, completed: completedMap.get(key) || 0 })
+      cursor.setDate(cursor.getDate() + 1)
+    }
+    return out
   },
   burndown(projectIds?: string[], days = 0): { dates: string[]; ideal: number[]; actual: number[] } {
     if (projectIds && projectIds.length === 0) return { dates: [], ideal: [], actual: [] }
@@ -597,24 +666,31 @@ export const taskRepo = {
     const doneEvents = tasks.filter((t) => t.status === 'done').map((t) => t.updated_at).sort()
     const endDate = doneEvents.length ? doneEvents[doneEvents.length - 1] : new Date().toISOString()
     const start = new Date(startDate)
-    // 窗口视图：时间轴延伸到今天，理想线锚定不变，实际剩余在窗口内可见
+    // 时间轴至少延伸到今天：任务全部完成后再看，实际线也应停在"今天"，而不是最后完成日
     let end = new Date(endDate)
-    if (days > 0 && end.getTime() < Date.now()) end = new Date()
-    const totalDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000))
+    if (end.getTime() < Date.now()) end = new Date()
+    // 时间轴按本地自然日铺格：起止都归本地零点，最后一点必然是"今天"。
+    // 旧实现 ceil((end-start)/86400000) 会溢出到明天；toISOString 截 UTC 日会把北京 0~8 点的完成记到前一天
+    const start0 = new Date(start); start0.setHours(0, 0, 0, 0)
+    const end0 = new Date(end); end0.setHours(0, 0, 0, 0)
+    const totalDays = Math.max(1, Math.round((end0.getTime() - start0.getTime()) / 86400000))
     const total = tasks.length
     const dates: string[] = []
     const ideal: number[] = []
     const actual: number[] = []
     const completedByDate = new Map<string, number>()
+    const dayKey = (ts: number) => {
+      const d = new Date(ts)
+      return `${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}-${`${d.getDate()}`.padStart(2, '0')}`
+    }
     tasks.forEach((t) => {
       if (t.status === 'done') {
-        const d = new Date(t.updated_at).toISOString().slice(0, 10)
+        const d = dayKey(new Date(t.updated_at).getTime())
         completedByDate.set(d, (completedByDate.get(d) || 0) + 1)
       }
     })
     for (let i = 0; i <= totalDays; i++) {
-      const d = new Date(start.getTime() + i * 86400000)
-      const key = d.toISOString().slice(0, 10)
+      const key = dayKey(start0.getTime() + i * 86400000)
       dates.push(key)
       ideal.push(Math.round(total * (1 - i / totalDays)))
     }
@@ -863,6 +939,93 @@ export const notificationRepo = {
   },
 }
 
+// ===== Messages（站内消息） =====
+// 会话上下文键：任务会话 > 项目会话 > 直聊；同一键 + 对方用户 = 一个会话
+const MESSAGE_SELECT = `
+  SELECT m.*, su.name AS sender_name, ru.name AS recipient_name,
+    p.name AS project_name, t.title AS task_title
+  FROM messages m
+  JOIN users su ON su.id = m.sender_id
+  JOIN users ru ON ru.id = m.recipient_id
+  LEFT JOIN projects p ON p.id = m.project_id
+  LEFT JOIN tasks t ON t.id = m.task_id
+`
+
+function contextClause(taskId?: string | null, projectId?: string | null, col = 'm.'): { sql: string; params: SqlParam[] } {
+  // col：联查时需限定为 m.（tasks 表也有 project_id，不限定会 ambiguous）；单表 UPDATE 传 ''
+  if (taskId) return { sql: `${col}task_id = ?`, params: [taskId] }
+  if (projectId) return { sql: `${col}project_id = ? AND ${col}task_id IS NULL`, params: [projectId] }
+  return { sql: `${col}task_id IS NULL AND ${col}project_id IS NULL`, params: [] }
+}
+
+export const messageRepo = {
+  create(data: { senderId: string; recipientId: string; projectId?: string | null; taskId?: string | null; content: string }): Message {
+    const id = genId()
+    db.prepare(
+      'INSERT INTO messages (id, sender_id, recipient_id, project_id, task_id, content, read, created_at) VALUES (?,?,?,?,?,?,0,?)',
+    ).run(
+      id, data.senderId, data.recipientId,
+      data.projectId || null, data.taskId || null, data.content, new Date().toISOString(),
+    )
+    return this.findById(id)!
+  },
+  findById(id: string): Message | null {
+    const row = db.prepare(`${MESSAGE_SELECT} WHERE m.id = ?`).get(id) as SqlRow
+    return row ? rowToMessage(row) : null
+  },
+  // 会话列表：双方涉及我的所有消息按时间升序遍历，聚合出每个 (上下文 × 对方) 的最后一条与未读数
+  threads(userId: string): MessageThread[] {
+    const rows = db.prepare(
+      `${MESSAGE_SELECT} WHERE m.sender_id = ? OR m.recipient_id = ? ORDER BY m.created_at ASC, m.id ASC`,
+    ).all(userId, userId) as SqlRow[]
+    const map = new Map<string, MessageThread>()
+    for (const r of rows) {
+      const mine = r.sender_id === userId
+      const peerId = mine ? r.recipient_id : r.sender_id
+      const peerName = mine ? r.recipient_name : r.sender_name
+      const ctx = r.task_id ? `task:${r.task_id}` : r.project_id ? `project:${r.project_id}` : 'direct'
+      const key = `${ctx}|${peerId}`
+      const unreadDelta = !mine && !r.read ? 1 : 0
+      const prev = map.get(key)
+      if (!prev) {
+        map.set(key, {
+          peerId, peerName,
+          projectId: r.project_id || null, projectName: r.project_name || null,
+          taskId: r.task_id || null, taskTitle: r.task_title || null,
+          lastContent: r.content, lastAt: r.created_at,
+          unread: unreadDelta, total: 1,
+        })
+      } else {
+        prev.lastContent = r.content
+        prev.lastAt = r.created_at
+        prev.unread += unreadDelta
+        prev.total += 1
+      }
+    }
+    return [...map.values()].sort((a, b) => (a.lastAt < b.lastAt ? 1 : a.lastAt > b.lastAt ? -1 : 0))
+  },
+  threadMessages(userId: string, peerId: string, taskId?: string | null, projectId?: string | null): Message[] {
+    const ctx = contextClause(taskId, projectId)
+    const rows = db.prepare(
+      `${MESSAGE_SELECT}
+       WHERE ((m.sender_id = ? AND m.recipient_id = ?) OR (m.sender_id = ? AND m.recipient_id = ?)) AND ${ctx.sql}
+       ORDER BY m.created_at ASC, m.id ASC`,
+    ).all(userId, peerId, peerId, userId, ...ctx.params) as SqlRow[]
+    return rows.map(rowToMessage)
+  },
+  // 把对方发给我、处于指定上下文内的未读消息全部标为已读
+  markThreadRead(userId: string, peerId: string, taskId?: string | null, projectId?: string | null): void {
+    const ctx = contextClause(taskId, projectId, '')
+    db.prepare(
+      `UPDATE messages SET read = 1 WHERE recipient_id = ? AND sender_id = ? AND read = 0 AND ${ctx.sql}`,
+    ).run(userId, peerId, ...ctx.params)
+  },
+  unreadCount(userId: string): number {
+    const r = db.prepare('SELECT COUNT(*) as c FROM messages WHERE recipient_id = ? AND read = 0').get(userId) as { c: number }
+    return r.c
+  },
+}
+
 // ===== Templates =====
 export const templateRepo = {
   findAll(): Template[] {
@@ -1010,6 +1173,16 @@ function rowToNotification(r: SqlRow): Notification {
     read: !!r.read, createdAt: r.created_at,
   }
 }
+function rowToMessage(r: SqlRow): Message {
+  return {
+    id: r.id,
+    senderId: r.sender_id, senderName: r.sender_name,
+    recipientId: r.recipient_id, recipientName: r.recipient_name,
+    projectId: r.project_id || null, projectName: r.project_name || null,
+    taskId: r.task_id || null, taskTitle: r.task_title || null,
+    content: r.content, read: !!r.read, createdAt: r.created_at,
+  }
+}
 function rowToUser(r: SqlRow): User {
   return {
     id: r.id, email: r.email, name: r.name, avatarColor: r.avatar_color,
@@ -1022,6 +1195,19 @@ function rowToUser(r: SqlRow): User {
     costCenter: r.cost_center || null,
     categoryId: r.category_id || null,
     customRoleId: r.custom_role_id || null,
+    mustChangePassword: !!r.must_change_password,
+  }
+}
+/** 解析项目台账自定义列配置（JSON，损坏/非法时回退 null = 未配置） */
+function parseOplogExtraConfig(raw: unknown): OpLogExtraConfig | null {
+  if (!raw || typeof raw !== 'string') return null
+  try {
+    const v = JSON.parse(raw) as OpLogExtraConfig | null
+    if (!v || typeof v !== 'object' || !Array.isArray(v.columns)) return null
+    const columns = v.columns.filter((c) => c && typeof c.key === 'string' && c.key && typeof c.label === 'string' && c.label)
+    return { enabled: Boolean(v.enabled), columns }
+  } catch {
+    return null
   }
 }
 function rowToProject(r: SqlRow): Project {
@@ -1033,6 +1219,8 @@ function rowToProject(r: SqlRow): Project {
     ownerName: r.owner_name || '', ownerAvatar: r.owner_avatar || '',
     startDate: r.start_date || null, dueDate: r.due_date, createdAt: r.created_at,
     totalBudget: r.total_budget ?? null,
+    seq: r.seq ?? null,
+    oplogExtraColumns: parseOplogExtraConfig(r.oplog_extra_columns),
     deletedAt: r.deleted_at || null,
     deleteRequestedBy: r.delete_requested_by || null,
     deleteRequestedAt: r.delete_requested_at || null,
@@ -1278,8 +1466,9 @@ export const hoursRepo = {
   },
   create(data: { taskId: string; userId: string; date: string; plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }): TaskHours {
     // 同任务同用户同一天 → 累加工时到已有记录
+    // 排除台账自动入账的记录（op_log_id 非空）：台账工时独立成条，由 opLogs 路由同步维护，不与手动登记混写
     const existing = db.prepare(
-      'SELECT * FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ?',
+      'SELECT * FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL',
     ).get(data.taskId, data.userId, data.date) as SqlRow | undefined
     if (existing) {
       const newPlanned = (Number(existing.planned_hours) || 0) + (data.plannedHours || 0)
@@ -1899,6 +2088,8 @@ export const rolePermissionRepo = {
 // ===== Op Logs（运维台账）=====
 export interface OpLogInput {
   projectId?: string | null
+  /** 序号：导入文件含「序号」列时按文件值；缺省由后端按项目自增分配 */
+  seq?: number
   category?: string
   status?: string
   proposer?: string
@@ -1913,6 +2104,8 @@ export interface OpLogInput {
   cause?: string
   solution?: string
   extraFields?: Record<string, string>
+  /** 关联任务 id（台账工时自动入账载体；null = 未指定，由路由层决定是否归集到兜底任务） */
+  taskId?: string | null
   /** 登记时间（导入时可指定，缺省为当前时间） */
   createdAt?: string
 }
@@ -1945,8 +2138,9 @@ const OPLOG_SORT_FIELDS: Record<string, string> = {
   logDate: 'log_date',
   completionDate: 'completion_date',
   hours: 'hours',
-  // 状态按业务顺序排序：待处理 → 处理中 → 已完成 → 已关闭
-  status: "CASE status WHEN '待处理' THEN 0 WHEN '处理中' THEN 1 WHEN '已完成' THEN 2 WHEN '已关闭' THEN 3 ELSE 4 END",
+  seq: 'seq',
+  // 状态按业务顺序排序：待处理 → 处理中 → 暂停 → 已完成 → 已关闭 → 取消
+  status: "CASE status WHEN '待处理' THEN 0 WHEN '处理中' THEN 1 WHEN '暂停' THEN 2 WHEN '已完成' THEN 3 WHEN '已关闭' THEN 4 WHEN '取消' THEN 5 ELSE 6 END",
   category: 'category',
   system: 'system',
   department: 'department',
@@ -1966,6 +2160,7 @@ function rowToOpLog(r: SqlRow): OpLog {
     id: r.id,
     projectId: r.project_id,
     userId: r.user_id,
+    seq: r.seq == null ? null : Number(r.seq),
     category: r.category || '其他',
     status: r.status || '待处理',
     proposer: r.proposer || '',
@@ -1980,6 +2175,9 @@ function rowToOpLog(r: SqlRow): OpLog {
     cause: r.cause || '',
     solution: r.solution || '',
     extraFields: extra,
+    // 台账工时入账（v1.9.4）：关联任务 + 是否已有入账记录（find/findById 的 SELECT 附带 hours_synced）
+    taskId: r.task_id || null,
+    hoursSynced: Number(r.hours_synced) === 1,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }
@@ -1989,7 +2187,8 @@ export const opLogRepo = {
   find(filter: OpLogFilter = {}): OpLog[] {
     const sc = scopeClause(filter.projectIds)
     if (sc === null) return []
-    let sql = 'SELECT * FROM op_logs WHERE deleted_at IS NULL'
+    // SELECT 附带 hours_synced：该台账是否已有入账到 task_hours 的工时记录（v1.9.4）
+    let sql = `SELECT l.*, EXISTS(SELECT 1 FROM task_hours th WHERE th.op_log_id = l.id) AS hours_synced FROM op_logs l WHERE l.deleted_at IS NULL`
     const params: SqlParam[] = []
 
     if (filter.projectId === 'none') {
@@ -2022,7 +2221,7 @@ export const opLogRepo = {
   },
 
   findById(id: string): OpLog | null {
-    const row = db.prepare('SELECT * FROM op_logs WHERE id = ? AND deleted_at IS NULL').get(id) as SqlRow | undefined
+    const row = db.prepare(`SELECT l.*, EXISTS(SELECT 1 FROM task_hours th WHERE th.op_log_id = l.id) AS hours_synced FROM op_logs l WHERE l.id = ? AND l.deleted_at IS NULL`).get(id) as SqlRow | undefined
     return row ? rowToOpLog(row) : null
   },
 
@@ -2124,13 +2323,18 @@ export const opLogRepo = {
   create(userId: string, data: OpLogInput): OpLog {
     const id = genId()
     const now = new Date().toISOString()
+    // 序号：导入文件指定优先；否则项目内自增（含软删行，避免序号复用）
+    const nextSeq = db.prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM op_logs WHERE project_id IS ?')
+      .get(data.projectId || null) as { n: number }
+    const seq = Number.isFinite(data.seq) ? Number(data.seq) : nextSeq.n
     db.prepare(`
-      INSERT INTO op_logs (id, project_id, user_id, category, status, proposer, system, department, log_date, recorder, problem, completion_date, hours, detail, cause, solution, extra_fields, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO op_logs (id, project_id, user_id, seq, category, status, proposer, system, department, log_date, recorder, problem, completion_date, hours, detail, cause, solution, extra_fields, task_id, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       data.projectId || null,
       userId,
+      seq,
       data.category || '其他',
       data.status || '待处理',
       data.proposer || '',
@@ -2145,6 +2349,7 @@ export const opLogRepo = {
       data.cause || '',
       data.solution || '',
       JSON.stringify(data.extraFields || {}),
+      data.taskId || null,
       data.createdAt || now,
       now,
     )
@@ -2171,9 +2376,10 @@ export const opLogRepo = {
       cause: data.cause !== undefined ? data.cause : existing.cause,
       solution: data.solution !== undefined ? data.solution : existing.solution,
       extraFields: data.extraFields !== undefined ? data.extraFields : existing.extraFields,
+      taskId: data.taskId !== undefined ? data.taskId : existing.taskId,
     }
     db.prepare(`
-      UPDATE op_logs SET project_id=?, category=?, status=?, proposer=?, system=?, department=?, log_date=?, recorder=?, problem=?, completion_date=?, hours=?, detail=?, cause=?, solution=?, extra_fields=?, updated_at=?
+      UPDATE op_logs SET project_id=?, category=?, status=?, proposer=?, system=?, department=?, log_date=?, recorder=?, problem=?, completion_date=?, hours=?, detail=?, cause=?, solution=?, extra_fields=?, task_id=?, updated_at=?
       WHERE id=?
     `).run(
       merged.projectId || null,
@@ -2191,6 +2397,7 @@ export const opLogRepo = {
       merged.cause,
       merged.solution,
       JSON.stringify(merged.extraFields || {}),
+      merged.taskId || null,
       now,
       id,
     )
@@ -2199,8 +2406,9 @@ export const opLogRepo = {
     return this.findById(id)
   },
 
-  softDelete(id: string): boolean {
-    const r = db.prepare('UPDATE op_logs SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL').run(new Date().toISOString(), id)
+  softDelete(id: string, deletedBy?: string): boolean {
+    // 记录删除人（v1.10.0 审计）：软删数据可追溯是谁删的
+    const r = db.prepare('UPDATE op_logs SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL').run(new Date().toISOString(), deletedBy || null, id)
     if (r.changes > 0) this.invalidateEmbedding(id)
     return r.changes > 0
   },

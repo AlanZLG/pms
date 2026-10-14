@@ -235,7 +235,8 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
       status: 'in_progress',
       priority: 'high',
       assigneeId: memberId,
-      plannedHours: 8,
+      // 计划 25h → 单日 20% 上限 5h，容纳后续 5h/3h 的单日登记
+      plannedHours: 25,
     }, adminToken)
     expect(r.status).toBe(201)
     taskId = (r.json.task as { id: string }).id
@@ -307,7 +308,8 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(r.status).toBe(200)
     const ov = r.json as { totalProjects: number; tasksByStatus: Record<string, number> }
     expect(ov.totalProjects).toBe(1)
-    expect(Object.values(ov.tasksByStatus).reduce((a, b) => a + b, 0)).toBe(1)
+    // 1 个任务 + 台账 1.5h 自动入账生成的兜底任务「运维日常工作」= 2
+    expect(Object.values(ov.tasksByStatus).reduce((a, b) => a + b, 0)).toBe(2)
   })
 
   it('软删任务 → 回收站可见 → 恢复 → 回读存在', async () => {
@@ -392,8 +394,8 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     expect(r.status).toBe(201)
     const template = r.json.template as { category: string | null; tasks: unknown[] }
     expect(template.category).toBe('运维项目')
-    // projectId 含 1 个任务（已从回收站恢复），应复制进模板
-    expect(template.tasks.length).toBe(1)
+    // projectId 含 1 个任务（已从回收站恢复）+ 台账自动入账生成的兜底任务，应复制进模板
+    expect(template.tasks.length).toBe(2)
   })
 
   it('建「运维增强」项目并登记 2 条台账（结项合并准备）', async () => {
@@ -663,7 +665,8 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
   })
 
   it('工时单价快照：旧工时按登记时价计成本，改类别价不追溯，新工时按新价', async () => {
-    // member 已在本项目 taskId 登记 5h 实际工时（登记时无个人/类别价 → 快照 = 成员默认 150）
+    // member 已在本项目 taskId 登记 5h 实际工时（登记时无个人/类别价 → 快照 = 成员默认 150）；
+    // 另有台账 1.5h 自动入账（member 录入，快照同为 150）
     const readMemberCost = async () => {
       const r = await req('GET', '/stats/project-cost', undefined, adminToken)
       expect(r.status).toBe(200)
@@ -672,10 +675,10 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
       return p.memberCosts.find((m) => m.userId === memberId)!
     }
 
-    // 改价前：5h × 150（登记时快照）
+    // 改价前：6.5h × 150 = 975（手动 5h + 台账入账 1.5h，快照同价）
     const before = await readMemberCost()
-    expect(before.totalHours).toBe(5)
-    expect(before.totalCost).toBe(750)
+    expect(before.totalHours).toBe(6.5)
+    expect(before.totalCost).toBe(975)
     expect(before.hourlyRate).toBe(150)
     expect(before.rateSource).toBe('role_member')
 
@@ -685,22 +688,22 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
     const catId = (created.json.category as { id: string }).id
     await req('PATCH', `/team/${memberId}/cost`, { categoryId: catId }, adminToken)
     const afterBind = await readMemberCost()
-    expect(afterBind.totalCost).toBe(750)
+    expect(afterBind.totalCost).toBe(975)
     expect(afterBind.rateSource).toBe('role_member')
 
     // 类别改价 300 → 350：旧工时成本仍不变
     const reprice = await req('PUT', `/team/categories/${catId}`, { hourlyRate: 350 }, adminToken)
     expect(reprice.status).toBe(200)
     const afterReprice = await readMemberCost()
-    expect(afterReprice.totalCost).toBe(750)
+    expect(afterReprice.totalCost).toBe(975)
 
-    // 新登记工时（不同日期避免同日累加）按新价 350：3h → 总成本 750 + 1050 = 1800（混合快照价）
+    // 新登记工时（不同日期避免同日累加）按新价 350：3h → 总成本 975 + 1050 = 2025（混合快照价）
     const add = await req('POST', `/tasks/${taskId}/hours`, { date: '2026-09-25', actualHours: 3 }, memberToken)
     expect(add.status).toBe(201)
     const afterAdd = await readMemberCost()
-    expect(afterAdd.totalHours).toBe(8)
-    expect(afterAdd.totalCost).toBe(1800)
-    expect(afterAdd.hourlyRate).toBe(225)
+    expect(afterAdd.totalHours).toBe(9.5)
+    expect(afterAdd.totalCost).toBe(2025)
+    expect(afterAdd.hourlyRate).toBeCloseTo(2025 / 9.5, 6)
     expect(afterAdd.rateSource).toBe('mixed')
 
     // 清理：解绑类别后删除（删除守卫要求先解绑成员）

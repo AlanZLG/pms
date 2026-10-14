@@ -72,6 +72,7 @@ export interface User {
   category?: UserCategory | null
   customRoleId?: string | null
   customRole?: CustomRole | null
+  mustChangePassword?: boolean
   taskCount?: number
   activeCount?: number
   /** 名下（作为负责人）未删除项目名列表，团队页展示用 */
@@ -94,6 +95,10 @@ export interface Project {
   dueDate: string | null
   /** v1.9.4 项目总预算：非空时明细分配受硬拦截约束（null = 未启用总额控制） */
   totalBudget?: number | null
+  /** 项目序号：全局唯一、软删不复用；可手动指定（插入式顺延），导入时可显式提供 */
+  seq?: number | null
+  /** 项目台账自定义列配置（null = 未配置，走动态扩展列；enabled 时展示/表单/导入导出按定义执行） */
+  oplogExtraColumns?: OpLogExtraConfig | null
   createdAt: string
   /** v1.9.0 结项合并：非空表示本项目已合并到目标运维项目（台账/课题记录已转绑） */
   mergedIntoProjectId?: string | null
@@ -188,6 +193,64 @@ export interface Notification {
   createdAt: string
 }
 
+// 站内消息：围绕项目/任务上下文在两人之间收发，回复即在同一上下文内继续发新消息
+export interface Message {
+  id: string
+  senderId: string
+  senderName: string
+  recipientId: string
+  recipientName: string
+  projectId: string | null
+  projectName: string | null
+  taskId: string | null
+  taskTitle: string | null
+  content: string
+  read: boolean
+  createdAt: string
+}
+
+// 会话 = (上下文: 任务或项目或直聊) × (对方用户)
+export interface MessageThread {
+  peerId: string
+  peerName: string
+  projectId: string | null
+  projectName: string | null
+  taskId: string | null
+  taskTitle: string | null
+  lastContent: string
+  lastAt: string
+  unread: number
+  total: number
+}
+
+// 全量操作审计（v1.10.0）：每个账号的写操作轨迹，按模块/动作分类管理
+export interface AuditLog {
+  id: string
+  userId: string | null
+  userName: string
+  method: string
+  path: string
+  module: string
+  action: string
+  targetId: string | null
+  statusCode: number
+  detail: string | null
+  ip: string | null
+  createdAt: string
+}
+
+export interface AuditQuery {
+  userId?: string
+  module?: string
+  action?: string
+  keyword?: string
+  dateFrom?: string
+  dateTo?: string
+  page?: number
+  pageSize?: number
+}
+
+
 export interface AuthResponse {
   token: string
   user: User
@@ -200,6 +263,29 @@ export interface StatsOverview {
   overdueProjects: number
   tasksByStatus: { todo: number; in_progress: number; review: number; done: number }
   trend: { date: string; completed: number; created: number }[]
+}
+
+// 方案 B 项目健康度（0-100 分，越高越健康；healthy ≥80 / warning ≥60 / danger <60）
+export type ProjectHealthLevel = 'healthy' | 'warning' | 'danger'
+export interface ProjectHealth {
+  projectId: string
+  projectName: string
+  ownerId: string
+  ownerName: string
+  status: ProjectStatus
+  // 时间进度：按 startDate(缺省取创建时间) ~ dueDate 周期内插；无截止日为 null
+  timeProgress: number | null
+  // 任务完成率；无任务为 null
+  doneRate: number | null
+  // 完成率 - 时间进度（负 = 落后于计划）；任一缺省为 null
+  deviation: number | null
+  // 项目逾期天数（已完成项目恒为 0）
+  overdueDays: number
+  overdueTasks: number
+  activeTasks: number
+  overdueDensity: number
+  healthScore: number
+  healthLevel: ProjectHealthLevel
 }
 
 export interface BurndownData {
@@ -474,12 +560,14 @@ export interface PermissionCategory {
 
 // ===== 运维台账 =====
 
-export type OpLogStatus = '待处理' | '处理中' | '已完成' | '已关闭'
+export type OpLogStatus = '待处理' | '处理中' | '暂停' | '取消' | '已完成' | '已关闭'
 
 export interface OpLog {
   id: string
   projectId: string | null
   userId: string
+  /** 序号：项目内自增（软删不回收），列表/导出固定第 1 列 */
+  seq?: number | null
   category: string | null
   status: string
   proposer: string | null
@@ -495,12 +583,34 @@ export interface OpLog {
   solution: string | null
   /** 扩展字段（列名 -> 值） */
   extraFields: Record<string, string>
+  /** 关联任务（台账工时自动入账的载体；null = 未指定，有工时时后端自动归集到项目「运维日常工作」任务） */
+  taskId?: string | null
+  /** 工时是否已入账到任务工时（task_hours 存在 op_log_id 反指记录） */
+  hoursSynced?: boolean
   createdAt: string
   updatedAt: string
 }
 
+/** 台账自定义列（扩展字段）数量上限：__ 前缀的内部字段（如 __sourceTaskId）不占名额 */
+export const OP_LOG_MAX_EXTRA_COLUMNS = 5
+
+/** 台账自定义列定义（项目级配置）：key 为数据存储键（稳定），label 为显示名/Excel 表头 */
+export interface OpLogExtraColumn {
+  key: string
+  label: string
+}
+
+/** 项目台账自定义列配置：启用后列表展示、表单填写、Excel 导入导出均按定义的字段与顺序执行 */
+export interface OpLogExtraConfig {
+  enabled: boolean
+  /** 自定义列定义（数组顺序即展示与导入导出顺序），最多 OP_LOG_MAX_EXTRA_COLUMNS 个 */
+  columns: OpLogExtraColumn[]
+}
+
 export interface OpLogInput {
   projectId?: string | null
+  /** 序号：导入文件含「序号」列时按文件值；缺省由后端按项目自增分配 */
+  seq?: number
   category?: string
   status?: string
   proposer?: string
@@ -515,6 +625,8 @@ export interface OpLogInput {
   cause?: string
   solution?: string
   extraFields?: Record<string, string>
+  /** 关联任务 id；空串/null 表示自动归集（有工时时落到项目「运维日常工作」任务） */
+  taskId?: string | null
 }
 
 export interface OpLogFilter {
