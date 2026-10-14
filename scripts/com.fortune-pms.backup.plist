@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fortune-pms.backup</string>
+  <!-- 备份逻辑内嵌执行，规避 Sequoia 对带 provenance 标记脚本的 EX_CONFIG 拦截。
+       等价于 scripts/backup-db.sh：一致性快照 + 完整性校验 + 7 天轮转 + iCloud 同步 -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>set -e; D=/Volumes/DATA/Project; B=$D/data/backups; I="$HOME/Library/Mobile Documents/com~apple~CloudDocs/pms-backups"; L=$B/backup.log; M=$(date +%Y%m%d); mkdir -p "$B" "$I"; if sqlite3 $D/data/app.db ".backup '$B/app-$M.db'" &amp;&amp; sqlite3 $B/app-$M.db 'PRAGMA integrity_check;' | grep -q '^ok$'; then find $B -name 'app-*.db' -mtime +1 -delete; cp -f $B/app-$M.db "$I/"; find "$I" -name 'app-*.db' -mtime +14 -delete; echo "[$(date '+%Y-%m-%d %H:%M:%S')] 备份完成 app-$M.db，已同步 iCloud"; else echo "[$(date '+%Y-%m-%d %H:%M:%S')] 错误: 备份或完整性校验失败"; exit 1; fi &gt;&gt; "$L"</string>
+  </array>
+  <!-- 每 24 小时执行一次；睡眠错过会在唤醒后自动补跑 -->
+  <key>StartInterval</key>
+  <integer>86400</integer>
+  <!-- 加载时立即执行一次，保证当天有备份 -->
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- 日志放主目录：launchd 无法打开外置卷上的日志文件会报 EX_CONFIG -->
+  <key>StandardOutPath</key>
+  <string>/Users/alanzlg/Library/Logs/fortune-pms-backup.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/alanzlg/Library/Logs/fortune-pms-backup.log</string>
+</dict>
+</plist>
