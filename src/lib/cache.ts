@@ -31,12 +31,14 @@ export function useSwr<T>(
   ttl = DEFAULT_TTL
 ): { data?: T; loading: boolean; error?: Error; revalidate: () => Promise<void>; mutate: (v: T | ((p: T) => T)) => void } {
   const [, forceTick] = useState(0)
+  const [error, setError] = useState<Error | undefined>(undefined)
   const mounted = useRef(true)
   const fetching = useRef(false)
 
   const entry = key ? cache.get(key) : undefined
   const data: T | undefined = entry?.data
-  const loading = !entry && !!key
+  // 出错时也要结束 loading，避免骨架屏永久卡死
+  const loading = !entry && !!key && !error
 
   const revalidate = useCallback(async () => {
     if (!key || fetching.current) return
@@ -45,9 +47,13 @@ export function useSwr<T>(
       const fresh = await fetcher()
       cache.set(key, { data: fresh, timestamp: Date.now() })
       subscribers.get(key)?.forEach((fn) => fn(fresh))
-      if (mounted.current) forceTick((v) => v + 1)
+      if (mounted.current) setError(undefined)
+    } catch (e) {
+      // 请求失败：保留旧缓存，暴露 error 并结束 loading
+      if (mounted.current) setError(e instanceof Error ? e : new Error(String(e)))
     } finally {
       fetching.current = false
+      if (mounted.current) forceTick((v) => v + 1)
     }
   }, [key, fetcher])
 
@@ -60,6 +66,8 @@ export function useSwr<T>(
 
   useEffect(() => {
     mounted.current = true
+    // 切换 key 时清掉上一个 key 的错误状态
+    setError(undefined)
     // 订阅同 key 的其他组件变更
     if (key) {
       if (!subscribers.has(key)) subscribers.set(key, new Set())
@@ -76,5 +84,5 @@ export function useSwr<T>(
     return () => { mounted.current = false }
   }, [key, entry, ttl, revalidate])
 
-  return { data, loading, error: undefined, revalidate, mutate }
+  return { data, loading, error, revalidate, mutate }
 }

@@ -76,7 +76,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   notify: (type, message, opts) => {
     const id = toastSeq++
-    const duration = opts?.duration ?? (opts?.onUndo ? 5000 : 3000)
+    // 错误停留更久便于阅读；带撤销操作给足反应时间；仍可用 opts.duration 单独覆盖
+    const duration = opts?.duration ?? Math.max(
+      opts?.onUndo ? 5000 : 0,
+      type === 'error' ? 5000 : type === 'warning' ? 4000 : 3000,
+    )
     set({ toast: { id, type, message, onUndo: opts?.onUndo, undoLabel: opts?.undoLabel } })
     setTimeout(() => {
       if (get().toast?.id === id) set({ toast: null })
