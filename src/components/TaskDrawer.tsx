@@ -280,7 +280,15 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
         billedHours: billed,
         description: hoursForm.description.trim(),
       })
-      setHours((prev) => [...prev, record])
+      // 服务端对同任务同天是累加合并语义：已有记录时返回合并后的既有记录（id 不变）
+      // 按 id upsert 更新本地列表，避免盲目 append 出现「旧值 + 合并值」幻影两行
+      setHours((prev) => {
+        const idx = prev.findIndex((h) => h.id === record.id)
+        if (idx < 0) return [...prev, record]
+        const next = [...prev]
+        next[idx] = record
+        return next
+      })
       setHoursForm({ date: hoursForm.date, plannedHours: '', actualHours: '', billedHours: '', description: '' })
       notify('success', '工时已登记')
     } catch (e) {
