@@ -9,7 +9,7 @@ import type {
   UserCategory, TaskDependency, TaskHistory, SavedFilter, TaskFilter, KanbanColumn,
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
   CustomRole, Permission, PermissionCategory, OpLog,
-  Message, MessageThread, OpLogExtraConfig,
+  Message, MessageThread, OpLogExtraConfig, OpLogCustomField, OpLogCustomFieldType,
 } from '../../shared/types.ts'
 import type { ProjectType, TemplateCategory } from '../../shared/types.ts'
 
@@ -56,12 +56,13 @@ export const userRepo = {
     db.prepare('UPDATE users SET name = ? WHERE id = ?').run(name, id)
     return this.findById(id)
   },
-  updateProfile(id: string, data: { name?: string; email?: string; avatarColor?: string }): User | null {
+  updateProfile(id: string, data: { name?: string; email?: string; avatarColor?: string; oplogColumnOrder?: string[] | null }): User | null {
     const fields: string[] = []
     const values: SqlParam[] = []
     if (data.name !== undefined) { fields.push('name = ?'); values.push(data.name) }
     if (data.email !== undefined) { fields.push('email = ?'); values.push(data.email) }
     if (data.avatarColor !== undefined) { fields.push('avatar_color = ?'); values.push(data.avatarColor) }
+    if (data.oplogColumnOrder !== undefined) { fields.push('oplog_column_order = ?'); values.push(data.oplogColumnOrder ? JSON.stringify(data.oplogColumnOrder) : null) }
     if (!fields.length) return this.findById(id)
     values.push(id)
     db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).run(...values)
@@ -1196,6 +1197,18 @@ function rowToUser(r: SqlRow): User {
     categoryId: r.category_id || null,
     customRoleId: r.custom_role_id || null,
     mustChangePassword: !!r.must_change_password,
+    oplogColumnOrder: parseStringArray(r.oplog_column_order),
+  }
+}
+
+/** 解析 JSON 字符串数列（损坏/非法时回退 null） */
+function parseStringArray(raw: unknown): string[] | null {
+  if (!raw || typeof raw !== 'string') return null
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr.filter((k): k is string => typeof k === 'string') : null
+  } catch {
+    return null
   }
 }
 /** 解析项目台账自定义列配置（JSON，损坏/非法时回退 null = 未配置） */
@@ -2183,6 +2196,69 @@ function rowToOpLog(r: SqlRow): OpLog {
   }
 }
 
+// ===== 台账全局自定义项库（事先统一定义，各项目从中勾选启用）=====
+// 六种字段类型（非法值防御性回退 text，避免历史/脏数据破坏渲染）
+const CUSTOM_FIELD_TYPES: OpLogCustomFieldType[] = ['text', 'textarea', 'number', 'date', 'select', 'url']
+function parseCustomFieldOptions(raw: unknown): string[] | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? arr.map(String) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const customFieldRepo = {
+  findAll(): OpLogCustomField[] {
+    const rows = db.prepare('SELECT key, label, type, options, sort FROM oplog_custom_fields ORDER BY sort, created_at').all() as Array<{ key: string; label: string; type: string; options: unknown; sort: number }>
+    return rows.map((r) => ({
+      key: r.key,
+      label: r.label,
+      type: (CUSTOM_FIELD_TYPES as string[]).includes(r.type) ? (r.type as OpLogCustomFieldType) : 'text',
+      ...(r.type === 'select' ? { options: parseCustomFieldOptions(r.options) } : {}),
+      sort: r.sort,
+    }))
+  },
+  findByKey(key: string): OpLogCustomField | null {
+    const r = db.prepare('SELECT key, label, type, options, sort FROM oplog_custom_fields WHERE key = ?').get(key) as { key: string; label: string; type: string; options: unknown; sort: number } | undefined
+    if (!r) return null
+    return {
+      key: r.key,
+      label: r.label,
+      type: (CUSTOM_FIELD_TYPES as string[]).includes(r.type) ? (r.type as OpLogCustomFieldType) : 'text',
+      ...(r.type === 'select' ? { options: parseCustomFieldOptions(r.options) } : {}),
+      sort: r.sort,
+    }
+  },
+  /** 新增自定义项：key 取显示名去空白（与存量数据键归一口径一致），创建后 key 不再变更；options 仅 select 类型存储 */
+  create(label: string, type: OpLogCustomFieldType, options?: string[]): OpLogCustomField {
+    const key = label.replace(/\s+/g, '')
+    const dup = this.findByKey(key)
+    if (dup) throw new ApiError(400, `自定义项「${key}」已存在`)
+    const max = (db.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM oplog_custom_fields').get() as { m: number }).m
+    db.prepare('INSERT INTO oplog_custom_fields (key, label, type, options, sort, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(key, label, type, type === 'select' ? JSON.stringify(options ?? []) : null, max + 1, new Date().toISOString())
+    return this.findByKey(key)!
+  },
+  /** 修改显示名/类型/选项（key 保持不变，历史数据不受影响） */
+  update(key: string, data: { label?: string; type?: OpLogCustomFieldType; options?: string[] }): OpLogCustomField | null {
+    const cur = this.findByKey(key)
+    if (!cur) return null
+    const label = data.label !== undefined ? data.label : cur.label
+    const type = data.type !== undefined ? data.type : cur.type
+    // options：显式传入时更新（仅 select 语义）；切换为 select 且未传时保留空选项，切离 select 时清空
+    const options = data.options !== undefined
+      ? (type === 'select' ? JSON.stringify(data.options) : null)
+      : (type === 'select' ? (cur.options ? JSON.stringify(cur.options) : '[]') : null)
+    db.prepare('UPDATE oplog_custom_fields SET label = ?, type = ?, options = ? WHERE key = ?').run(label, type, options, key)
+    return this.findByKey(key)
+  },
+  remove(key: string): void {
+    db.prepare('DELETE FROM oplog_custom_fields WHERE key = ?').run(key)
+  },
+}
+
 export const opLogRepo = {
   find(filter: OpLogFilter = {}): OpLog[] {
     const sc = scopeClause(filter.projectIds)
@@ -2411,6 +2487,25 @@ export const opLogRepo = {
     const r = db.prepare('UPDATE op_logs SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL').run(new Date().toISOString(), deletedBy || null, id)
     if (r.changes > 0) this.invalidateEmbedding(id)
     return r.changes > 0
+  },
+
+  /** 批量软删除（一键清空）：事务内逐条打删除标记并失效向量缓存，返回实际删除条数 */
+  softDeleteMany(ids: readonly string[], deletedBy?: string): number {
+    if (ids.length === 0) return 0
+    const now = new Date().toISOString()
+    const tx = db.transaction((list: readonly string[]) => {
+      const stmt = db.prepare('UPDATE op_logs SET deleted_at = ?, deleted_by = ? WHERE id = ? AND deleted_at IS NULL')
+      let n = 0
+      for (const id of list) {
+        const r = stmt.run(now, deletedBy || null, id)
+        if (r.changes > 0) {
+          n++
+          this.invalidateEmbedding(id)
+        }
+      }
+      return n
+    })
+    return tx(ids)
   },
 
   distinct(column: 'category' | 'system' | 'department', projectId?: string, projectIds?: string[] | null): string[] {

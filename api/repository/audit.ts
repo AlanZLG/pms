@@ -3,7 +3,7 @@
 // 配合 mapRequestToAudit 把请求映射为业务语义（模块/动作/对象），分类可查。
 // 已有的 task_history / activity_log / system_activity_log 是业务展示层，继续保留。
 
-import { type Request, type Response, type NextFunction } from 'express'
+import { type Response, type NextFunction } from 'express'
 import db, { type SqlRow, type SqlParam } from '../db.ts'
 import { genId } from '../lib/utils.ts'
 import { userRepo } from './repo.ts'

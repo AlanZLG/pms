@@ -38,7 +38,6 @@ router.get('/overview', (req: AuthRequest, res: Response, next: NextFunction) =>
     const since = daysProvided ? new Date(Date.now() - days * 86400000).toISOString() : undefined
     const scope = resolveScope(user, projectId)
     const visibleProjects = projectRepo.findAll().filter((p) => !scope || scope.includes(p.id))
-    const now = new Date()
     // 逾期按日级比较：截止日早于今天才算逾期，当天截止不算（与前端 Dashboard 口径一致）
     const today0 = new Date(); today0.setHours(0, 0, 0, 0)
     const overdue = visibleProjects.filter((p) => p.dueDate && new Date(p.dueDate) < today0 && p.status !== 'completed').length

@@ -7,7 +7,7 @@ vi.mock('../api/db.ts', async () => {
 })
 
 import db from '../api/db.ts'
-import { genId, seedUser, seedProject } from './helpers/test-db'
+import { seedUser, seedProject } from './helpers/test-db'
 import { opLogRepo } from '../api/repository/repo.ts'
 import { completionMissing } from '../api/routes/opLogs.ts'
 

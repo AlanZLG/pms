@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { toggleExpanded, showExpandHint, PROBLEM_HINT_MIN_CHARS } from '../src/lib/problemExpand.ts'
+import { toggleExpanded, showExpandHint, cellToggleHint, PROBLEM_HINT_MIN_CHARS } from '../src/lib/problemExpand.ts'
 
 describe('toggleExpanded', () => {
   it('未展开时加入 id（点击展开）', () => {
@@ -50,5 +50,19 @@ describe('showExpandHint', () => {
   it('空内容（undefined/空串）不显示提示', () => {
     expect(showExpandHint(undefined, false)).toBe(false)
     expect(showExpandHint('', false)).toBe(false)
+  })
+})
+
+describe('cellToggleHint', () => {
+  it('展开态始终返回「收起」（提供收起入口）', () => {
+    expect(cellToggleHint('长'.repeat(PROBLEM_HINT_MIN_CHARS + 1), true)).toBe('收起')
+    expect(cellToggleHint('短', true)).toBe('收起')
+    expect(cellToggleHint(undefined, true)).toBe('收起')
+  })
+
+  it('折叠态超过阈值返回「展开」，未超过返回 null', () => {
+    expect(cellToggleHint('长'.repeat(PROBLEM_HINT_MIN_CHARS + 1), false)).toBe('展开')
+    expect(cellToggleHint('长'.repeat(PROBLEM_HINT_MIN_CHARS), false)).toBeNull()
+    expect(cellToggleHint('短问题', false)).toBeNull()
   })
 })

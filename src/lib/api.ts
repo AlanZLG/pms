@@ -10,7 +10,7 @@ import type {
   CustomRole, PermissionCategory,
   Message, MessageThread,
   AuditLog, AuditQuery,
-  OpLog, OpLogInput, OpLogFilter, OpLogOptions, OpLogStat, OpLogExtraConfig,
+  OpLog, OpLogInput, OpLogFilter, OpLogOptions, OpLogStat, OpLogExtraConfig, OpLogCustomField, OpLogCustomFieldType,
   OpLogAiAnalyzeRequest, OpLogAiAnalyzeResponse, OpLogAiAnalysis, OpLogAiCase, OpLogAiStatus,
   AiChatRequest,
 } from '../../shared/types'
@@ -89,7 +89,7 @@ export const api = {
   login: (data: { email: string; password: string }) =>
     request<AuthResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }),
   me: () => request<{ user: User }>('/api/auth/me'),
-  updateProfile: (data: { name: string; avatarColor?: string }) =>
+  updateProfile: (data: { name?: string; avatarColor?: string; oplogColumnOrder?: string[] | null }) =>
     request<{ user: User }>('/api/auth/me', { method: 'PUT', body: JSON.stringify(data) }),
   changePassword: (data: { currentPassword: string; newPassword: string }) =>
     request<{ success: boolean; token?: string }>('/api/auth/me/password', { method: 'PUT', body: JSON.stringify(data) }),
@@ -695,6 +695,12 @@ export const api = {
     request<{ log: OpLog }>(`/api/op-logs/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteOpLog: (id: string) =>
     request<{ ok: boolean }>(`/api/op-logs/${id}`, { method: 'DELETE' }),
+  // 一键清空：按当前筛选范围批量打删除标记（服务端要求 confirm=true 二次确认）
+  clearOpLogs: (filter: OpLogFilter = {}) =>
+    request<{ ok: boolean; cleared: number }>('/api/op-logs/clear', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: true, ...filter, sortBy: undefined, sortDir: undefined }),
+    }),
 
   // 台账 Excel 导入（正式写入；skipDuplicates=false 时重复行照导）
   importOpLogs: async (file: File, projectId?: string, opts?: { skipDuplicates?: boolean }): Promise<{
@@ -773,7 +779,7 @@ export const api = {
   },
 
   // 台账 Excel 导出（带当前筛选条件）
-  exportOpLogs: async (filter: OpLogFilter = {}): Promise<void> => {
+  exportOpLogs: async (filter: OpLogFilter = {}, columnOrder?: string[]): Promise<void> => {
     const token = getToken()
     if (!token) throw new Error('未登录')
     const params = new URLSearchParams()
@@ -787,6 +793,8 @@ export const api = {
     if (filter.dateTo) params.set('dateTo', filter.dateTo)
     if (filter.sortBy) params.set('sortBy', filter.sortBy)
     if (filter.sortDir) params.set('sortDir', filter.sortDir)
+    // 导出跟随当前界面列序：后端优先采用请求携带的列序，规避列设置异步保存失败/未同步时的旧序
+    if (columnOrder && columnOrder.length > 0) params.set('colOrder', JSON.stringify(columnOrder))
     const query = params.toString()
     const res = await fetch(`/api/op-logs/export.xlsx${query ? `?${query}` : ''}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -818,6 +826,15 @@ export const api = {
 
   // ===== 台账 AI 经验分析 =====
   getOpLogAiStatus: () => request<OpLogAiStatus>('/api/op-logs/ai/status'),
+
+  // ===== 台账全局自定义项库：事先统一定义（管理员维护），各项目从中勾选启用 =====
+  listOpLogCustomFields: () => request<{ fields: OpLogCustomField[] }>('/api/op-logs/custom-fields'),
+  createOpLogCustomField: (data: { label: string; type: OpLogCustomFieldType; options?: string[] }) =>
+    request<{ field: OpLogCustomField }>('/api/op-logs/custom-fields', { method: 'POST', body: JSON.stringify(data) }),
+  updateOpLogCustomField: (key: string, data: { label?: string; type?: OpLogCustomFieldType; options?: string[] }) =>
+    request<{ field: OpLogCustomField }>(`/api/op-logs/custom-fields/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  deleteOpLogCustomField: (key: string) =>
+    request<{ success: boolean }>(`/api/op-logs/custom-fields/${encodeURIComponent(key)}`, { method: 'DELETE' }),
   analyzeOpLog: (data: OpLogAiAnalyzeRequest) =>
     request<OpLogAiAnalyzeResponse>('/api/op-logs/ai/analyze', { method: 'POST', body: JSON.stringify(data) }),
   /** 流式 AI 分析（SSE over fetch，EventSource 不支持 POST）：meta→delta→done 事件；服务端发 error 事件时抛错 */

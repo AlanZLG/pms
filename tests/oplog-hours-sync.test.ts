@@ -7,7 +7,7 @@ vi.mock('../api/db.ts', async () => {
 })
 
 import db from '../api/db.ts'
-import { genId, seedUser, seedProject, seedTask } from './helpers/test-db'
+import { seedUser, seedProject, seedTask } from './helpers/test-db'
 import { opLogRepo, hoursRepo } from '../api/repository/repo.ts'
 import { findOrCreateFallbackTask, resolveOpLogTaskId, syncOpLogHours, OPLOG_FALLBACK_TASK_TITLE } from '../api/routes/opLogs.ts'
 import { ApiError } from '../api/lib/utils.ts'

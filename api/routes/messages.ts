@@ -21,7 +21,8 @@ router.post('/', (req: AuthRequest, res: Response, next: NextFunction) => {
     const parsed = sendSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     const { recipientId, content } = parsed.data
-    let { taskId, projectId } = parsed.data
+    const { taskId } = parsed.data
+    let { projectId } = parsed.data
 
     if (recipientId === senderId) throw new ApiError(400, '不能给自己发消息')
     const recipient = userRepo.findById(recipientId)

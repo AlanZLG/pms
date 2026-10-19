@@ -66,8 +66,10 @@ router.get('/me', authRequired, (req: AuthRequest, res: Response, next: NextFunc
 })
 
 const updateProfileSchema = z.object({
-  name: z.string().min(1, '昵称不能为空').max(40, '昵称不能超过40个字符'),
+  name: z.string().min(1, '昵称不能为空').max(40, '昵称不能超过40个字符').optional(),
   avatarColor: z.string().regex(/^#[0-9A-Fa-f]{6}$/, '头像颜色格式不正确').optional(),
+  // 台账列表列顺序（用户级持久化；导出按同序排列）
+  oplogColumnOrder: z.array(z.string().min(1).max(80)).max(60).nullable().optional(),
 })
 
 router.put('/me', authRequired, (req: AuthRequest, res: Response, next: NextFunction) => {

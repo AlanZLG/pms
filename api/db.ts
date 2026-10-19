@@ -1294,8 +1294,95 @@ try {
     db.exec('ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0')
     console.log('[db] 已添加 must_change_password 字段到 users 表')
   }
+  // 台账列表列顺序（用户级 JSON 数组，如 ["logDate","extra:客户名称",...]）：登录后恢复设置，导出按同序排列
+  if (!cols.includes('oplog_column_order')) {
+    db.exec('ALTER TABLE users ADD COLUMN oplog_column_order TEXT')
+    console.log('[db] 已添加 oplog_column_order 字段到 users 表')
+  }
 } catch (e) {
-  console.error('[db] 添加 users.must_change_password 字段失败:', e)
+  console.error('[db] 添加 users 表新字段失败:', e)
+}
+
+// 台账全局自定义项库：事先统一定义字段（key/label/type），各项目从中勾选启用
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS oplog_custom_fields (
+      key TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('text', 'textarea', 'number', 'date', 'select', 'url')),
+      options TEXT,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    )
+  `)
+  // 类型扩展迁移（v1.10）：早期建表 CHECK 仅含 text/date，需重建表放宽为六种类型并补 options 列
+  const ocTblSql = (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='oplog_custom_fields'").get() as { sql?: string } | undefined)?.sql || ''
+  if (ocTblSql && !ocTblSql.includes("'number'")) {
+    db.exec(`
+      CREATE TABLE oplog_custom_fields_new (
+        key TEXT PRIMARY KEY,
+        label TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('text', 'textarea', 'number', 'date', 'select', 'url')),
+        options TEXT,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+      INSERT INTO oplog_custom_fields_new (key, label, type, sort, created_at)
+        SELECT key, label, type, sort, created_at FROM oplog_custom_fields;
+      DROP TABLE oplog_custom_fields;
+      ALTER TABLE oplog_custom_fields_new RENAME TO oplog_custom_fields;
+    `)
+    console.log('[db] oplog_custom_fields 已重建：类型扩展为 text/textarea/number/date/select/url（含 options 列）')
+  }
+  // 种子数据：存量台账数据中实际在用的 6 个自定义项（key 与 extra_fields 数据键一致，保证历史数据无缝衔接）
+  // 「对应日」为日期型：表单日期选择器、导入序列数归一化、导出真日期格式；「实绩工数(小时)」为数字型（统一 2 位小数）
+  const seedCount = (db.prepare('SELECT COUNT(*) AS c FROM oplog_custom_fields').get() as { c: number }).c
+  if (seedCount === 0) {
+    const ins = db.prepare('INSERT OR IGNORE INTO oplog_custom_fields (key, label, type, sort, created_at) VALUES (?, ?, ?, ?, ?)')
+    const now = new Date().toISOString()
+    const seeds: [string, string, string][] = [
+      ['对应者', '对应者', 'text'],
+      ['关联报表', '关联报表', 'text'],
+      ['优先等级', '优先等级', 'text'],
+      ['实绩工数(小时)', '实绩工数(小时)', 'number'],
+      ['台账区分', '台账区分', 'text'],
+      ['对应日', '对应日', 'date'],
+    ]
+    seeds.forEach(([k, label, type], i) => ins.run(k, label, type, i + 1, now))
+    console.log('[db] 已初始化台账全局自定义项库（6 个种子字段，对应日为日期型、实绩工数为数字型）')
+  } else {
+    // 存量库：「实绩工数(小时)」从 text 升级为 number（历史文本值可被解析为数字，不可解析的值在导入/导出时按文本回退）
+    const sw = db.prepare("UPDATE oplog_custom_fields SET type='number' WHERE key='实绩工数(小时)' AND type='text'").run()
+    if (sw.changes > 0) console.log('[db] 自定义项「实绩工数(小时)」类型已升级为 number（2 位小数）')
+  }
+  // 存量数据一次性清洗（幂等）：
+  // 1) 扩展字段键内的空白字符归一（历史导入产生「实绩工数\\n(小时)」带换行的键）
+  // 2) 日期型字段「对应日」的 Excel 序列数（如 46211）转为 YYYY-MM-DD
+  const excelSerialToISO = (n: number): string => new Date(Date.UTC(1899, 11, 30) + n * 86400000).toISOString().slice(0, 10)
+  const rows = db.prepare("SELECT id, extra_fields FROM op_logs WHERE extra_fields IS NOT NULL AND extra_fields != '{}'").all() as { id: string; extra_fields: string }[]
+  let cleaned = 0
+  const upd = db.prepare('UPDATE op_logs SET extra_fields = ? WHERE id = ?')
+  for (const row of rows) {
+    try {
+      const obj = JSON.parse(row.extra_fields) as Record<string, unknown>
+      const next: Record<string, unknown> = {}
+      let changed = false
+      for (const [k, v] of Object.entries(obj)) {
+        const nk = k.replace(/\s+/g, '')
+        let nv = v
+        if (nk === '对应日' && typeof v === 'string' && /^\d+(\.\d+)?$/.test(v.trim())) {
+          const n = Number(v.trim())
+          if (n > 20000 && n < 80000) { nv = excelSerialToISO(n); changed = true }
+        }
+        if (nk !== k) changed = true
+        next[nk] = nv
+      }
+      if (changed) { upd.run(JSON.stringify(next), row.id); cleaned++ }
+    } catch { /* 非法 JSON 跳过 */ }
+  }
+  if (cleaned > 0) console.log(`[db] 已清洗 ${cleaned} 条台账扩展字段（键空白归一 + 对应日序列数转日期）`)
+} catch (e) {
+  console.error('[db] 初始化台账全局自定义项库失败:', e)
 }
 
 // 台账工时入账（v1.9.4）：台账关联任务 + 工时记录反指台账（台账为录入入口，工时自动落到任务）

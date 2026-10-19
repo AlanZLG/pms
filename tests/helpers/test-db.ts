@@ -124,6 +124,15 @@ export function createTestDb(): Database.Database {
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS oplog_custom_fields (
+      key TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'text' CHECK (type IN ('text', 'textarea', 'number', 'date', 'select', 'url')),
+      options TEXT,
+      sort INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS comments (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

@@ -11,7 +11,6 @@ import { seedUser, seedProject, seedTask } from './helpers/test-db'
 import { projectRepo, taskRepo } from '../api/repository/repo.ts'
 import { computeProjectHealth } from '../api/routes/stats.ts'
 
-const DAY = 86400000
 // 固定"今天"：2026-09-29 本地零点（时区 +08:00 与生产一致）
 const TODAY0 = new Date('2026-09-29T00:00:00+08:00')
 

@@ -27,7 +27,6 @@ describe('仪表盘趋势/燃尽时间窗', () => {
 
   describe('trendDaily：连续 N 个自然日（含今天）+ 本地时区归日', () => {
     it('固定返回 14 天连续日期轴，无数据补 0，窗口外任务不计入', () => {
-      const now = new Date()
       const at = (dayOffset: number, h: number) => {
         const d = new Date(); d.setDate(d.getDate() + dayOffset); d.setHours(h, 0, 0, 0); return d
       }

@@ -5,7 +5,7 @@ import { z } from 'zod'
 import multer from 'multer'
 import bcrypt from 'bcrypt'
 import ExcelJS from 'exceljs'
-import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo, budgetRepo, notificationRepo, historyRepo, activityLogRepo } from '../repository/repo.ts'
+import { projectRepo, userRepo, kanbanColumnRepo, projectTemplateRepo, taskRepo, budgetRepo, notificationRepo, historyRepo, activityLogRepo, customFieldRepo } from '../repository/repo.ts'
 import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.ts'
 import { pushFeishuNotification } from '../lib/notifier.ts'
 import { ApiError } from '../lib/utils.ts'
@@ -239,19 +239,23 @@ router.put('/:projectId/oplog-columns', (req: AuthRequest, res: Response, next: 
     }
     const parsed = z.object({
       enabled: z.boolean(),
+      // 项目从全局自定义项库勾选启用：只需传字段键（label 由服务端按库回填，全局改名即时生效）
       columns: z.array(z.object({
         key: z.string().min(1, '字段键不能为空').max(64, '字段键过长'),
-        label: z.string().trim().min(1, '列名不能为空').max(50, '列名过长（最多 50 字）'),
       })).max(OP_LOG_MAX_EXTRA_COLUMNS, `自定义列最多 ${OP_LOG_MAX_EXTRA_COLUMNS} 个`),
     }).safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     const { enabled, columns } = parsed.data
-    if (enabled && columns.length === 0) throw new ApiError(400, '启用自定义列时至少定义 1 列')
-    const labels = columns.map((c) => c.label)
-    if (new Set(labels).size !== labels.length) throw new ApiError(400, '自定义列名称不能重复')
-    const keys = columns.map((c) => c.key)
-    if (new Set(keys).size !== keys.length) throw new ApiError(400, '自定义列字段键重复，请刷新后重试')
-    const payload: OpLogExtraConfig = { enabled, columns: columns.map((c) => ({ key: c.key, label: c.label })) }
+    if (enabled && columns.length === 0) throw new ApiError(400, '启用自定义列时至少勾选 1 个自定义项')
+    // 字段键必须存在于全局自定义项库；label 以库为准（统一维护，改名全项目生效）
+    const payload: OpLogExtraConfig = {
+      enabled,
+      columns: columns.map((c) => {
+        const field = customFieldRepo.findByKey(c.key)
+        if (!field) throw new ApiError(400, `自定义项「${c.key}」不存在于自定义项库，请刷新后重新勾选`)
+        return { key: field.key, label: field.label }
+      }),
+    }
     projectRepo.setOplogColumns(project.id, payload)
     activityLogRepo.create(project.id, req.userId!, 'oplog_columns',
       enabled ? `配置台账自定义列（${columns.length} 列）` : '停用台账自定义列')

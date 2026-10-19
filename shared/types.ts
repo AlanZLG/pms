@@ -73,6 +73,8 @@ export interface User {
   customRoleId?: string | null
   customRole?: CustomRole | null
   mustChangePassword?: boolean
+  /** 台账列表列顺序（用户级持久化）：如 ["logDate","extra:客户名称",...]；登录恢复，导出同序 */
+  oplogColumnOrder?: string[] | null
   taskCount?: number
   activeCount?: number
   /** 名下（作为负责人）未删除项目名列表，团队页展示用 */
@@ -594,6 +596,16 @@ export interface OpLog {
 /** 台账自定义列（扩展字段）数量上限：__ 前缀的内部字段（如 __sourceTaskId）不占名额 */
 export const OP_LOG_MAX_EXTRA_COLUMNS = 10
 
+/**
+ * 台账固定列的默认显示顺序（列设置的默认序，前端表格与后端导出共用，保证两端补齐语义一致）
+ * - 'project' 仅全局视图展示（嵌入/具体项目视图过滤）
+ * - 'seq'（序号）固定第 1 列、'操作' 固定最后，不参与排序，不在其中
+ */
+export const OP_LOG_DEFAULT_COLUMN_ORDER = [
+  'logDate', 'category', 'status', 'project', 'system', 'department',
+  'proposer', 'recorder', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'hours', 'createdAt',
+] as const
+
 /** 台账自定义列定义（项目级配置）：key 为数据存储键（稳定），label 为显示名/Excel 表头 */
 export interface OpLogExtraColumn {
   key: string
@@ -603,8 +615,22 @@ export interface OpLogExtraColumn {
 /** 项目台账自定义列配置：启用后列表展示、表单填写、Excel 导入导出均按定义的字段与顺序执行 */
 export interface OpLogExtraConfig {
   enabled: boolean
-  /** 自定义列定义（数组顺序即展示与导入导出顺序），最多 OP_LOG_MAX_EXTRA_COLUMNS 个 */
+  /** 自定义列定义（数组顺序即展示与导入导出顺序），最多 OP_LOG_MAX_EXTRA_COLUMNS 个；columns 引用全局自定义项库的字段键，label 由服务端按库回填 */
   columns: OpLogExtraColumn[]
+}
+
+/** 台账自定义项类型：决定表单控件与 Excel 导入导出的处理方式 */
+export type OpLogCustomFieldType = 'text' | 'textarea' | 'number' | 'date' | 'select' | 'url'
+
+/** 台账自定义项（字段库）：事先统一定义，各项目从中勾选启用；key 为数据存储键（创建后不变），type 决定表单控件与导入导出处理，options 仅 select 类型使用 */
+export interface OpLogCustomField {
+  key: string
+  label: string
+  /** text=普通文本；textarea=多行文本；number=数字（统一保留 2 位小数，导出数值单元格）；date=日期（表单日期选择器，导入自动归一化 Excel 序列数/日期串，导出写真日期格式）；select=下拉单选（options 为可选项）；url=链接（导出为可点击超链接） */
+  type: OpLogCustomFieldType
+  /** select 类型的可选项（仅 type=select 时有效） */
+  options?: string[]
+  sort: number
 }
 
 export interface OpLogInput {

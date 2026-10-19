@@ -15,3 +15,12 @@ export function toggleExpanded(ids: ReadonlySet<string>, id: string): Set<string
 export function showExpandHint(problem: string | undefined | null, expanded: boolean): boolean {
   return !expanded && (problem?.length ?? 0) > PROBLEM_HINT_MIN_CHARS
 }
+
+/**
+ * 单元格切换提示文案：展开态返回「收起」（始终显示，提供收起入口）；
+ * 折叠态超过阈值返回「展开」；否则返回 null（不显示）。
+ */
+export function cellToggleHint(content: string | undefined | null, expanded: boolean): '展开' | '收起' | null {
+  if (expanded) return '收起'
+  return (content?.length ?? 0) > PROBLEM_HINT_MIN_CHARS ? '展开' : null
+}

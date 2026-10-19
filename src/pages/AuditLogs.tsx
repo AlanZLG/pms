@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Navigate } from 'react-router-dom'
-import { ScrollText, Search, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ScrollText, Search, RotateCcw, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { Card, Button, EmptyState } from '@/components/ui'
 import { api } from '@/lib/api'
 import { useAppStore } from '@/stores/app'
@@ -66,6 +66,8 @@ export default function AuditLogs() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [users, setUsers] = useState<Array<{ id: string; name: string }>>([])
+  // 明细弹窗（点击行展开，超长明细在弹窗内滚动查看）
+  const [detailRow, setDetailRow] = useState<AuditLog | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -197,7 +199,11 @@ export default function AuditLogs() {
               </thead>
               <tbody>
                 {rows.map((r) => (
-                  <tr key={r.id} className="border-b border-border/50 last:border-0 hover:bg-bg-soft/60">
+                  <tr
+                    key={r.id}
+                    onClick={() => setDetailRow(r)}
+                    className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-bg-soft/60"
+                  >
                     <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{r.createdAt.replace('T', ' ').slice(0, 19)}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-text-primary">{r.userName}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-text-secondary">{moduleLabel(r.module)}</td>
@@ -228,6 +234,40 @@ export default function AuditLogs() {
           </div>
         )}
       </Card>
+
+      {/* 日志明细弹窗：点击行展开，超长明细在弹窗内滚动查看 */}
+      {detailRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setDetailRow(null)}>
+          <div
+            className="flex max-h-[75vh] w-full max-w-2xl flex-col rounded-2xl border border-bg-border bg-bg-panel p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-display text-lg text-text-primary">日志明细</h3>
+              <Button variant="ghost" size="sm" onClick={() => setDetailRow(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <div className="mb-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+              <div><span className="text-muted">时间：</span><span className="text-text-primary">{detailRow.createdAt.replace('T', ' ').slice(0, 19)}</span></div>
+              <div><span className="text-muted">操作人：</span><span className="text-text-primary">{detailRow.userName}</span></div>
+              <div><span className="text-muted">模块：</span><span className="text-text-secondary">{moduleLabel(detailRow.module)}</span></div>
+              <div><span className="text-muted">动作：</span><span className="text-text-secondary">{actionLabel(detailRow.action)}</span></div>
+              <div className="break-all"><span className="text-muted">对象：</span><span className="font-mono text-muted">{detailRow.targetId || '-'}</span></div>
+              <div><span className="text-muted">结果：</span><span className={`font-mono ${statusColor(detailRow.statusCode)}`}>{detailRow.statusCode}</span></div>
+              <div><span className="text-muted">IP：</span><span className="font-mono text-muted">{detailRow.ip || '-'}</span></div>
+              <div className="break-all"><span className="text-muted">请求：</span><span className="font-mono text-muted">{detailRow.method} {detailRow.path}</span></div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-bg-border bg-bg-soft p-3">
+              {detailRow.detail ? (
+                <pre className="whitespace-pre-wrap break-all font-mono text-xs text-text-secondary">{detailRow.detail}</pre>
+              ) : (
+                <p className="py-4 text-center text-xs text-muted">该条日志无明细</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

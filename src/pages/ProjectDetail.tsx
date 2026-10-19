@@ -1265,7 +1265,15 @@ export default function ProjectDetail() {
                 <div key={r.id} className="rounded-lg border border-bg-border bg-bg-soft px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-sm font-medium text-text-primary">
-                      {r.action === 'reassign' ? '人员替换' : r.action === 'owner_transfer' ? '负责人转移' : r.action}
+                      {r.action === 'reassign'
+                        ? '人员替换'
+                        : r.action === 'owner_transfer'
+                          ? '负责人转移'
+                          : r.action === 'oplog_clear'
+                            ? '清空台账'
+                            : r.action === 'oplog_delete'
+                              ? '删除台账'
+                              : r.action}
                     </span>
                     <span className="text-xs text-muted">{new Date(r.createdAt).toLocaleString('zh-CN')}</span>
                   </div>

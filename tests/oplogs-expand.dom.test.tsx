@@ -108,8 +108,9 @@ describe('OpLogsPanel 问题列展开/收起（组件级）', () => {
     await user.click(long.div)
 
     expect(long.div.className).not.toContain('line-clamp-2')
-    expect(long.td.getAttribute('title')).toBeNull()
+    expect(long.td.getAttribute('title')).toBe('点击收起')
     expect(within(long.td).queryByText('展开')).toBeNull()
+    expect(within(long.td).getByText('收起')).toBeTruthy()
     expect(within(long.td).getByText(longText)).toBeTruthy()
     // 独立性：长文本展开后，短文本行仍保持折叠
     expect(short.div.className).toContain('line-clamp-2')

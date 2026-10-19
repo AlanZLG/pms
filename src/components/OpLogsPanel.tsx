@@ -29,11 +29,11 @@ import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
 import { Button, Input, Textarea, EmptyState } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { toggleExpanded, showExpandHint } from '@/lib/problemExpand'
+import { toggleExpanded, cellToggleHint } from '@/lib/problemExpand'
 import { useAppStore } from '@/stores/app'
 import AiChatDrawer from '@/components/AiChatDrawer'
-import type { OpLog, OpLogFilter, OpLogStat, Project, Task, OpLogAiAnalyzeResponse, OpLogAiCase, OpLogExtraConfig } from '../../shared/types'
-import { OP_LOG_MAX_EXTRA_COLUMNS } from '../../shared/types'
+import type { OpLog, OpLogFilter, OpLogStat, Project, Task, OpLogAiAnalyzeResponse, OpLogAiCase, OpLogExtraConfig, OpLogCustomField, OpLogCustomFieldType } from '../../shared/types'
+import { OP_LOG_MAX_EXTRA_COLUMNS, OP_LOG_DEFAULT_COLUMN_ORDER } from '../../shared/types'
 
 const STATUSES = ['待处理', '处理中', '暂停', '取消', '已完成', '已关闭']
 
@@ -75,30 +75,46 @@ const statusStyle: Record<string, string> = {
 
 // ===== 列显示顺序自定义 =====
 // 可调序列（序号永远第 1 列、操作永远最后，不在其中）；'extra:<字段名>' 为动态自定义列
-const DEFAULT_COL_ORDER = [
-  'logDate', 'category', 'status', 'project', 'system', 'department',
-  'proposer', 'recorder', 'problem', 'solution', 'completionDate', 'hours', 'createdAt',
-] as const
+// 默认序取 shared 的 OP_LOG_DEFAULT_COLUMN_ORDER（与后端导出补齐共用，保证界面序 = 导出序）
+const DEFAULT_COL_ORDER = OP_LOG_DEFAULT_COLUMN_ORDER
 const COL_LABELS: Record<string, string> = {
   logDate: '日期', category: '分类', status: '状态', project: '项目', system: '系统',
-  department: '部门', proposer: '提出人', recorder: '记录人', problem: '问题', solution: '解决方案',
-  completionDate: '完成日', hours: '工时', createdAt: '登记日期',
+  department: '部门', proposer: '提出人', recorder: '记录人', problem: '问题', detail: '详细描述',
+  cause: '原因', solution: '解决方案', completionDate: '完成日', hours: '工时', createdAt: '登记日期',
 }
 const COL_ORDER_KEY = 'fortune:oplogs:colOrder'
 
 // 冻结表头：滚动台账条目时表头吸顶（sticky 由各 th 携带，保证背景不透底）
 const TH_STICKY = 'sticky top-0 z-10 border-b border-bg-border bg-bg-soft'
 
-/** 读取本地持久化的列顺序（只保留已知标准列；自定义列由数据动态合并） */
+/** 读取本地持久化的列顺序（标准列 + 'extra:' 自定义列；未保存时用默认序） */
 function loadColOrder(): string[] {
   try {
     const arr = JSON.parse(localStorage.getItem(COL_ORDER_KEY) || '[]')
     if (!Array.isArray(arr)) return [...DEFAULT_COL_ORDER]
     const known = new Set<string>(DEFAULT_COL_ORDER)
-    return arr.filter((k: unknown) => typeof k === 'string' && known.has(k))
+    return arr.filter((k: unknown) => typeof k === 'string' && (known.has(k) || k.startsWith('extra:')))
   } catch {
     return [...DEFAULT_COL_ORDER]
   }
+}
+
+/** 合并持久化顺序与动态列：缺失标准列按默认相对位置插入，自定义列尾部追加（导出端 mergeFixedExportOrder 与此同语义） */
+export function mergeColumnOrder(stored: readonly string[], extraKeys: readonly string[]): string[] {
+  const valid = new Set<string>([...DEFAULT_COL_ORDER, ...extraKeys.map((k) => `extra:${k}`)])
+  const order = stored.filter((k) => valid.has(k))
+  for (const k of DEFAULT_COL_ORDER) {
+    if (order.includes(k)) continue
+    const defIdx = DEFAULT_COL_ORDER.indexOf(k)
+    let pos = 0
+    for (let i = 0; i < order.length; i++) {
+      const d = (DEFAULT_COL_ORDER as readonly string[]).indexOf(order[i])
+      if (d >= 0 && d < defIdx) pos = i + 1
+    }
+    order.splice(pos, 0, k)
+  }
+  for (const k of extraKeys) if (!order.includes(`extra:${k}`)) order.push(`extra:${k}`)
+  return order
 }
 
 interface OpLogsPanelProps {
@@ -158,6 +174,7 @@ const emptyForm = (): FormState => ({
 export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
   const notify = useAppStore((s) => s.notify)
   const currentUser = useAppStore((s) => s.user)
+  const setUser = useAppStore((s) => s.setUser)
   const isEmbedded = Boolean(projectId)
 
   // ===== 筛选状态 =====
@@ -232,12 +249,16 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
     [projects, scopedProjectId],
   )
   const extraConfig: OpLogExtraConfig | null = scopedProject?.oplogExtraColumns?.enabled ? scopedProject.oplogExtraColumns : null
-  // 自定义列 key → 显示名（配置模式取定义名；自由模式列名即数据键，回退自身）
+  // 台账全局自定义项库：事先统一定义（管理员维护），各项目从中勾选启用
+  const customFields = useAsync<OpLogCustomField[]>(() => api.listOpLogCustomFields().then((r) => r.fields), [])
+  const fieldLibrary = customFields.data || []
+  // 自定义列 key → 显示名：以全局库为准（改名即时生效），配置定义名兜底，自由模式回退自身
   const extraLabels = useMemo(() => {
     const m = new Map<string, string>()
     if (extraConfig) for (const c of extraConfig.columns) m.set(c.key, c.label)
+    for (const f of fieldLibrary) m.set(f.key, f.label)
     return m
-  }, [extraConfig])
+  }, [extraConfig, fieldLibrary])
 
   // 缺省 Tab：全局模式下项目列表首次加载后自动选中第一个项目（用户已手动切换过则不覆盖）
   const defaultPickedRef = useRef(isEmbedded)
@@ -272,39 +293,49 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
     return keys
   }, [logs, extraConfig])
 
-  // ===== 列显示顺序（localStorage 持久化；序号永远第 1 列、操作永远最后） =====
-  const [storedOrder, setStoredOrder] = useState<string[]>(loadColOrder)
+  // ===== 列显示顺序（localStorage + 服务端双持久化；序号永远第 1 列、操作永远最后） =====
+  // 初始化优先取服务端保存的顺序（跨设备/重登一致），无则回退本机缓存
+  const [storedOrder, setStoredOrder] = useState<string[]>(() => {
+    const remote = currentUser?.oplogColumnOrder
+    if (Array.isArray(remote) && remote.length > 0) return [...remote]
+    return loadColOrder()
+  })
   useEffect(() => {
     try { localStorage.setItem(COL_ORDER_KEY, JSON.stringify(storedOrder)) } catch { /* 隐私模式等场景忽略 */ }
   }, [storedOrder])
+  // 每个用户登录后同步一次服务端列序（覆盖 /me 异步加载晚于挂载的场景）
+  const orderSyncedUserRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!currentUser || orderSyncedUserRef.current === currentUser.id) return
+    orderSyncedUserRef.current = currentUser.id
+    const remote = currentUser.oplogColumnOrder
+    if (Array.isArray(remote) && remote.length > 0) setStoredOrder([...remote])
+  }, [currentUser])
+  // 列顺序保存到服务端（防抖；导出 Excel 按同一顺序生成表头）
+  const orderSyncTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const persistServerOrder = useCallback((order: string[]) => {
+    if (orderSyncTimer.current) clearTimeout(orderSyncTimer.current)
+    orderSyncTimer.current = setTimeout(() => {
+      api.updateProfile({ oplogColumnOrder: order })
+        .then((r) => setUser(r.user))
+        .catch(() => {})
+    }, 600)
+  }, [setUser])
   // 实际渲染列序：持久化顺序 + 动态补充缺失的标准列/自定义列，并按当前视图过滤项目列
-  const columnOrder = useMemo(() => {
-    const valid = new Set<string>([...DEFAULT_COL_ORDER, ...extraKeys.map((k) => `extra:${k}`)])
-    const order = storedOrder.filter((k) => valid.has(k))
-    for (const k of DEFAULT_COL_ORDER) if (!order.includes(k)) order.push(k)
-    for (const k of extraKeys) if (!order.includes(`extra:${k}`)) order.push(`extra:${k}`)
-    return order.filter((k) => k !== 'project' || showProjectColumn)
-  }, [storedOrder, extraKeys, showProjectColumn])
+  const columnOrder = useMemo(
+    () => mergeColumnOrder(storedOrder, extraKeys).filter((k) => k !== 'project' || showProjectColumn),
+    [storedOrder, extraKeys, showProjectColumn],
+  )
   // 列设置面板中展示的完整列清单（含项目列占位，便于全局模式下调整）
-  const settingColumns = useMemo(() => {
-    const valid = new Set<string>([...DEFAULT_COL_ORDER, ...extraKeys.map((k) => `extra:${k}`)])
-    const order = storedOrder.filter((k) => valid.has(k))
-    for (const k of DEFAULT_COL_ORDER) if (!order.includes(k)) order.push(k)
-    for (const k of extraKeys) if (!order.includes(`extra:${k}`)) order.push(`extra:${k}`)
-    return order
-  }, [storedOrder, extraKeys])
+  const settingColumns = useMemo(() => mergeColumnOrder(storedOrder, extraKeys), [storedOrder, extraKeys])
   const moveCol = (key: string, dir: -1 | 1) => {
-    setStoredOrder((prev) => {
-      const valid = new Set<string>([...DEFAULT_COL_ORDER, ...extraKeys.map((k) => `extra:${k}`)])
-      const arr = prev.filter((k) => valid.has(k))
-      for (const k of DEFAULT_COL_ORDER) if (!arr.includes(k)) arr.push(k)
-      for (const k of extraKeys) if (!arr.includes(`extra:${k}`)) arr.push(`extra:${k}`)
-      const i = arr.indexOf(key)
-      const j = i + dir
-      if (i < 0 || j < 0 || j >= arr.length) return arr
-      ;[arr[i], arr[j]] = [arr[j], arr[i]]
-      return arr
-    })
+    const arr = mergeColumnOrder(storedOrder, extraKeys)
+    const i = arr.indexOf(key)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= arr.length) return
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+    setStoredOrder(arr)
+    persistServerOrder(arr)
   }
 
   // 列表表头渲染（按自定义列序；吸顶冻结样式见 TH_STICKY）
@@ -319,8 +350,12 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
         return <th key={key} className={cn(TH_STICKY, 'whitespace-nowrap px-3 py-3 text-left font-medium')}>项目</th>
       case 'problem':
         return <th key={key} className={cn(TH_STICKY, 'w-[280px] min-w-[280px] px-3 py-3 text-left font-medium')}>问题</th>
+      case 'detail':
+        return <th key={key} className={cn(TH_STICKY, 'w-[280px] min-w-[280px] px-3 py-3 text-left font-medium')}>详细描述</th>
       case 'solution':
         return <th key={key} className={cn(TH_STICKY, 'w-[280px] min-w-[280px] px-3 py-3 text-left font-medium')}>解决方案</th>
+      case 'cause':
+        return <th key={key} className={cn(TH_STICKY, 'w-[280px] min-w-[280px] px-3 py-3 text-left font-medium')}>原因</th>
       case 'hours':
         return <SortTh key={key} col={sortCol('hours')} sort={sort} onToggle={toggleSort} align="right" className={TH_STICKY} />
       case 'createdAt':
@@ -371,17 +406,17 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
         return (
           <td
             key={key}
-            className={cn('min-w-[280px] max-w-[280px] px-3 py-3 text-text-primary', !expandedCells.has(`${log.id}:problem`) && 'cursor-pointer')}
+            className={cn('min-w-[280px] max-w-[280px] px-3 py-3 text-text-primary', log.problem && 'cursor-pointer')}
             onClick={() => {
               if (!log.problem) return
               setExpandedCells((prev) => toggleExpanded(prev, `${log.id}:problem`))
             }}
-            title={expandedCells.has(`${log.id}:problem`) ? undefined : '点击查看完整内容'}
+            title={expandedCells.has(`${log.id}:problem`) ? '点击收起' : '点击查看完整内容'}
           >
             <div className={cn('break-all', !expandedCells.has(`${log.id}:problem`) && 'line-clamp-2')}>{log.problem}</div>
             <div className="mt-0.5 flex items-center gap-1.5">
-              {showExpandHint(log.problem, expandedCells.has(`${log.id}:problem`)) && (
-                <span className="text-xs text-brand-soft">展开</span>
+              {cellToggleHint(log.problem, expandedCells.has(`${log.id}:problem`)) && (
+                <span className="text-xs text-brand-soft">{expandedCells.has(`${log.id}:problem`) ? '收起' : '展开'}</span>
               )}
               <button
                 type="button"
@@ -407,22 +442,55 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
             )}
           </td>
         )
+      case 'detail':
+        return (
+          <td
+            key={key}
+            className={cn('min-w-[280px] max-w-[280px] px-3 py-3 text-text-primary', log.detail && 'cursor-pointer')}
+            onClick={() => {
+              if (!log.detail) return
+              setExpandedCells((prev) => toggleExpanded(prev, `${log.id}:detail`))
+            }}
+            title={log.detail ? (expandedCells.has(`${log.id}:detail`) ? '点击收起' : '点击查看完整内容') : undefined}
+          >
+            <div className={cn('break-all', log.detail && !expandedCells.has(`${log.id}:detail`) && 'line-clamp-2')}>{log.detail || '-'}</div>
+            {log.detail && (
+              <div className="mt-0.5 flex items-center gap-1.5">
+                {cellToggleHint(log.detail, expandedCells.has(`${log.id}:detail`)) && (
+                  <span className="text-xs text-brand-soft">{expandedCells.has(`${log.id}:detail`) ? '收起' : '展开'}</span>
+                )}
+                <button
+                  type="button"
+                  title="复制全文"
+                  className="text-muted transition hover:text-brand-soft"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void navigator.clipboard.writeText(log.detail)
+                    notify('success', '详细描述已复制')
+                  }}
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+          </td>
+        )
       case 'solution':
         return (
           <td
             key={key}
-            className={cn('min-w-[280px] max-w-[280px] px-3 py-3 text-text-primary', log.solution && !expandedCells.has(`${log.id}:solution`) && 'cursor-pointer')}
+            className={cn('min-w-[280px] max-w-[280px] px-3 py-3 text-text-primary', log.solution && 'cursor-pointer')}
             onClick={() => {
               if (!log.solution) return
               setExpandedCells((prev) => toggleExpanded(prev, `${log.id}:solution`))
             }}
-            title={log.solution ? (expandedCells.has(`${log.id}:solution`) ? undefined : '点击查看完整内容') : undefined}
+            title={log.solution ? (expandedCells.has(`${log.id}:solution`) ? '点击收起' : '点击查看完整内容') : undefined}
           >
             <div className={cn('break-all', log.solution && !expandedCells.has(`${log.id}:solution`) && 'line-clamp-2')}>{log.solution || '-'}</div>
             {log.solution && (
               <div className="mt-0.5 flex items-center gap-1.5">
-                {showExpandHint(log.solution, expandedCells.has(`${log.id}:solution`)) && (
-                  <span className="text-xs text-brand-soft">展开</span>
+                {cellToggleHint(log.solution, expandedCells.has(`${log.id}:solution`)) && (
+                  <span className="text-xs text-brand-soft">{expandedCells.has(`${log.id}:solution`) ? '收起' : '展开'}</span>
                 )}
                 <button
                   type="button"
@@ -432,6 +500,39 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
                     e.stopPropagation()
                     void navigator.clipboard.writeText(log.solution)
                     notify('success', '解决方案已复制')
+                  }}
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+              </div>
+            )}
+          </td>
+        )
+      case 'cause':
+        return (
+          <td
+            key={key}
+            className={cn('min-w-[280px] max-w-[280px] px-3 py-3 text-text-primary', log.cause && 'cursor-pointer')}
+            onClick={() => {
+              if (!log.cause) return
+              setExpandedCells((prev) => toggleExpanded(prev, `${log.id}:cause`))
+            }}
+            title={log.cause ? (expandedCells.has(`${log.id}:cause`) ? '点击收起' : '点击查看完整内容') : undefined}
+          >
+            <div className={cn('break-all', log.cause && !expandedCells.has(`${log.id}:cause`) && 'line-clamp-2')}>{log.cause || '-'}</div>
+            {log.cause && (
+              <div className="mt-0.5 flex items-center gap-1.5">
+                {cellToggleHint(log.cause, expandedCells.has(`${log.id}:cause`)) && (
+                  <span className="text-xs text-brand-soft">{expandedCells.has(`${log.id}:cause`) ? '收起' : '展开'}</span>
+                )}
+                <button
+                  type="button"
+                  title="复制全文"
+                  className="text-muted transition hover:text-brand-soft"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    void navigator.clipboard.writeText(log.cause)
+                    notify('success', '原因已复制')
                   }}
                 >
                   <Copy className="h-3 w-3" />
@@ -499,18 +600,68 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
   const [showStats, setShowStats] = useState(false)
   // 列设置面板显隐
   const [showColSettings, setShowColSettings] = useState(false)
-  // 台账自定义列配置（项目级；仅项目负责人/管理员可改）
+  // 台账自定义项配置（项目级：从全局字段库勾选启用；仅项目负责人/管理员可改）
   const [extraCfgOpen, setExtraCfgOpen] = useState(false)
-  const [extraCfgDraft, setExtraCfgDraft] = useState<{ enabled: boolean; columns: { key: string; label: string }[] }>({ enabled: false, columns: [] })
+  const [extraCfgDraft, setExtraCfgDraft] = useState<{ enabled: boolean; keys: string[] }>({ enabled: false, keys: [] })
   const [extraCfgSaving, setExtraCfgSaving] = useState(false)
   const canConfigExtra = !!(scopedProject && currentUser && (currentUser.role === 'admin' || scopedProject.ownerId === currentUser.id))
-  // 首次启用时从现有数据预填列定义（沿用数据键，保证历史数据无缝衔接）；已配置过则用已存定义
+  // 全局自定义项库管理（仅管理员）：新增/改名/改类型/删除即时生效
+  const canManageLibrary = currentUser?.role === 'admin'
+  const [newFieldName, setNewFieldName] = useState('')
+  const [newFieldType, setNewFieldType] = useState<OpLogCustomFieldType>('text')
+  const [newFieldOptions, setNewFieldOptions] = useState('')
+  const [libBusy, setLibBusy] = useState(false)
+  // 选项输入解析：逗号/中文逗号/换行分隔，去空白去重
+  const parseFieldOptions = (raw: string): string[] => Array.from(new Set(raw.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean)))
+  const addField = async () => {
+    const label = newFieldName.trim()
+    if (!label) return
+    try {
+      setLibBusy(true)
+      await api.createOpLogCustomField({ label, type: newFieldType, ...(newFieldType === 'select' ? { options: parseFieldOptions(newFieldOptions) } : {}) })
+      setNewFieldName('')
+      setNewFieldOptions('')
+      await customFields.reload()
+    } catch (err) {
+      notify('error', getErrorMessage(err, '添加自定义项失败'))
+    } finally {
+      setLibBusy(false)
+    }
+  }
+  const renameField = async (key: string, label: string) => {
+    const t = label.trim()
+    const cur = fieldLibrary.find((f) => f.key === key)
+    if (!t || !cur || t === cur.label) return
+    try { await api.updateOpLogCustomField(key, { label: t }); await customFields.reload() } catch (err) { notify('error', getErrorMessage(err, '修改自定义项失败')) }
+  }
+  const changeFieldType = async (key: string, type: OpLogCustomFieldType) => {
+    const cur = fieldLibrary.find((f) => f.key === key)
+    if (!cur || cur.type === type) return
+    try { await api.updateOpLogCustomField(key, { type }); await customFields.reload() } catch (err) { notify('error', getErrorMessage(err, '修改自定义项类型失败')) }
+  }
+  // select 类型选项维护（失焦保存）：传空数组清空选项
+  const updateFieldOptions = async (key: string, raw: string) => {
+    const cur = fieldLibrary.find((f) => f.key === key)
+    const opts = parseFieldOptions(raw)
+    if (!cur || JSON.stringify(cur.options || []) === JSON.stringify(opts)) return
+    try { await api.updateOpLogCustomField(key, { options: opts }); await customFields.reload() } catch (err) { notify('error', getErrorMessage(err, '修改自定义项选项失败')) }
+  }
+  const removeField = async (key: string) => {
+    try {
+      await api.deleteOpLogCustomField(key)
+      await customFields.reload()
+      setExtraCfgDraft((d) => ({ ...d, keys: d.keys.filter((k) => k !== key) }))
+    } catch (err) {
+      notify('error', getErrorMessage(err, '删除自定义项失败'))
+    }
+  }
+  // 打开配置弹窗：已配置过用已存勾选；首次打开默认勾选库中与当前数据出现过的字段交集
   const openExtraCfg = () => {
     if (!scopedProjectId) return
     const cur = scopedProject?.oplogExtraColumns
     setExtraCfgDraft(cur
-      ? { enabled: cur.enabled, columns: cur.columns.map((c) => ({ ...c })) }
-      : { enabled: false, columns: extraKeys.map((k) => ({ key: k, label: extraLabels.get(k) || k })) })
+      ? { enabled: cur.enabled, keys: cur.columns.map((c) => c.key) }
+      : { enabled: false, keys: extraKeys.filter((k) => fieldLibrary.some((f) => f.key === k)) })
     setExtraCfgOpen(true)
   }
   const saveExtraCfg = async () => {
@@ -519,9 +670,9 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
       setExtraCfgSaving(true)
       await api.updateProjectOplogColumns(scopedProjectId, {
         enabled: extraCfgDraft.enabled,
-        columns: extraCfgDraft.columns.map((c) => ({ key: c.key, label: c.label.trim() })),
+        columns: extraCfgDraft.keys.map((key) => ({ key, label: extraLabels.get(key) || key })),
       })
-      notify('success', extraCfgDraft.enabled ? '台账自定义列配置已保存' : '已停用台账自定义列（列定义保留）')
+      notify('success', extraCfgDraft.enabled ? '台账自定义列配置已保存' : '已停用台账自定义列（勾选保留）')
       setExtraCfgOpen(false)
       await projectsData.reload()
     } catch (err) {
@@ -771,6 +922,31 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
     }
   }
 
+  // ===== 一键清空（按当前筛选范围批量打删除标记，软删除）=====
+  const [clearOpen, setClearOpen] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  // 与单条删除同口径：项目负责人或管理员；跨项目清空（全局视图）仅管理员
+  const canClearAll = !!currentUser && (currentUser.role === 'admin' || (!!scopedProject && scopedProject.ownerId === currentUser.id))
+  const clearableCount = logsData.data?.logs.length ?? 0
+  const clearScopeLabel = projectId
+    ? (scopedProject?.name || '当前项目')
+    : projectFilter !== 'all'
+      ? (projectsData.data?.find((p) => p.id === projectFilter)?.name || '所选项目')
+      : '全部台账（跨项目）'
+  const handleClearAll = async () => {
+    setClearing(true)
+    try {
+      const r = await api.clearOpLogs(effectiveFilter)
+      notify('success', `已清空 ${r.cleared} 条台账记录`)
+      setClearOpen(false)
+      reloadAll()
+    } catch (e) {
+      notify('error', getErrorMessage(e, '清空失败'))
+    } finally {
+      setClearing(false)
+    }
+  }
+
   // ===== Excel 导入/导出/模板 =====
   const fileRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
@@ -844,7 +1020,8 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
 
   const handleExport = async () => {
     try {
-      await api.exportOpLogs(effectiveFilter)
+      // 携带当前界面列序：保证导出表头顺序与列设置后的表格一模一样
+      await api.exportOpLogs(effectiveFilter, [...columnOrder])
       notify('success', '导出成功')
     } catch (e) {
       notify('error', getErrorMessage(e, '导出失败'))
@@ -960,6 +1137,17 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
           <Button variant="ghost" size="sm" onClick={handleExport} title="按当前筛选导出 Excel">
             <Download className="h-3.5 w-3.5" /> 导出
           </Button>
+          {canClearAll && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={clearing || clearableCount === 0}
+              onClick={() => setClearOpen(true)}
+              title="按当前筛选范围清空台账（打删除标记，需二次确认）"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> 清空
+            </Button>
+          )}
           {aiChatEnabled && (
             <Button variant="ghost" size="sm" onClick={() => setAiChatOpen(true)} title="基于台账经验的对话式排障问答">
               <Bot className="h-3.5 w-3.5" /> AI 助手
@@ -1211,7 +1399,14 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
         <div className="rounded-2xl border border-bg-border bg-bg-panel p-4">
           <div className="mb-1 flex items-center justify-between">
             <p className="text-xs font-semibold text-text-primary">列显示顺序</p>
-            <button onClick={() => setStoredOrder([...DEFAULT_COL_ORDER])} className="text-xs text-brand-soft transition hover:underline">
+            <button
+              onClick={() => {
+                const order = [...DEFAULT_COL_ORDER]
+                setStoredOrder(order)
+                persistServerOrder(order)
+              }}
+              className="text-xs text-brand-soft transition hover:underline"
+            >
               恢复默认
             </button>
           </div>
@@ -1309,6 +1504,7 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
             setExtraRows={setExtraRows}
             extraKeySuggestions={[...new Set(logs.flatMap((l) => Object.keys(l.extraFields || {})))]}
             extraConfig={formExtraConfig}
+            customFields={fieldLibrary}
             projects={projects}
             projectWritable={projectWritable}
             lockProject={lockProject}
@@ -1325,93 +1521,174 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
           document.body,
         )}
 
-      {/* 台账自定义列配置弹窗：定义本项目自定义列的名称与顺序（导入/导出/展示按此执行） */}
+      {/* 台账自定义项配置弹窗：全局字段库（管理员维护）+ 本项目勾选启用（导入/导出/展示按勾选执行） */}
       {extraCfgOpen &&
         createPortal(
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setExtraCfgOpen(false)}>
-            <div className="max-h-[80vh] w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-slate-800" onClick={(e) => e.stopPropagation()}>
+            <div className="max-h-[85vh] w-full max-w-xl overflow-hidden rounded-xl bg-white shadow-2xl dark:bg-slate-800" onClick={(e) => e.stopPropagation()}>
               <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-700">
-                <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">台账自定义列配置</h3>
+                <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">台账自定义项配置</h3>
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  为「{scopedProject?.name}」定义自定义列的名称与顺序（最多 {OP_LOG_MAX_EXTRA_COLUMNS} 个）。启用后台账列表、登记表单、Excel 导入导出均按此配置执行。
+                  自定义项由管理员统一定义，「{scopedProject?.name}」从中勾选启用（最多 {OP_LOG_MAX_EXTRA_COLUMNS} 个）。启用后台账列表、登记表单、Excel 导入导出均按勾选字段与顺序执行。
                 </p>
               </div>
-              <div className="max-h-[50vh] space-y-3 overflow-y-auto px-5 py-4">
-                <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-                  <input
-                    type="checkbox"
-                    checked={extraCfgDraft.enabled}
-                    onChange={(e) => setExtraCfgDraft((d) => ({ ...d, enabled: e.target.checked }))}
-                    className="h-4 w-4 accent-sky-600"
-                  />
-                  启用项目自定义列（停用后保持原有动态扩展列方式）
-                </label>
-                {extraCfgDraft.columns.map((col, i) => (
-                  <div key={col.key} className="flex items-center gap-2">
-                    <span className="w-6 shrink-0 text-right font-mono text-xs text-slate-400">{i + 1}</span>
-                    <input
-                      value={col.label}
-                      onChange={(e) => setExtraCfgDraft((d) => ({
-                        ...d,
-                        columns: d.columns.map((c, j) => (j === i ? { ...c, label: e.target.value } : c)),
-                      }))}
-                      placeholder={`列名 ${i + 1}`}
-                      className="flex-1 rounded-md border border-slate-300 bg-transparent px-2.5 py-1.5 text-sm text-slate-800 outline-none focus:border-sky-500 dark:border-slate-600 dark:text-slate-100"
-                    />
-                    <button
-                      disabled={i === 0}
-                      onClick={() => setExtraCfgDraft((d) => {
-                        const columns = [...d.columns]
-                        ;[columns[i - 1], columns[i]] = [columns[i], columns[i - 1]]
-                        return { ...d, columns }
-                      })}
-                      className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 dark:hover:bg-slate-700"
-                      title="上移"
-                    >
-                      <ArrowUp className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      disabled={i === extraCfgDraft.columns.length - 1}
-                      onClick={() => setExtraCfgDraft((d) => {
-                        const columns = [...d.columns]
-                        ;[columns[i], columns[i + 1]] = [columns[i + 1], columns[i]]
-                        return { ...d, columns }
-                      })}
-                      className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 dark:hover:bg-slate-700"
-                      title="下移"
-                    >
-                      <ArrowDown className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      onClick={() => setExtraCfgDraft((d) => ({ ...d, columns: d.columns.filter((_, j) => j !== i) }))}
-                      className="rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30"
-                      title="删除该列"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                ))}
-                {extraCfgDraft.columns.length < OP_LOG_MAX_EXTRA_COLUMNS && (
-                  <button
-                    onClick={() => setExtraCfgDraft((d) => ({
-                      ...d,
-                      columns: [...d.columns, { key: `col_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, label: '' }],
-                    }))}
-                    className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-sky-600 transition hover:bg-sky-50 dark:text-sky-400 dark:hover:bg-sky-900/30"
-                  >
-                    <Plus className="h-3.5 w-3.5" /> 添加列
-                  </button>
+              <div className="max-h-[62vh] space-y-5 overflow-y-auto px-5 py-4">
+                {canManageLibrary && (
+                  <section>
+                    <p className="mb-2 text-xs font-semibold text-slate-700 dark:text-slate-200">自定义项库（全局 · 管理员维护）</p>
+                    <div className="space-y-1.5">
+                      {fieldLibrary.map((f) => (
+                        <div key={f.key}>
+                          <div className="flex items-center gap-2">
+                            <input
+                              defaultValue={f.label}
+                              onBlur={(e) => void renameField(f.key, e.target.value)}
+                              title={`存储键：${f.key}（改名只改显示名，历史数据不受影响）`}
+                              className="flex-1 rounded-md border border-slate-300 bg-transparent px-2.5 py-1.5 text-sm text-slate-800 outline-none focus:border-sky-500 dark:border-slate-600 dark:text-slate-100"
+                            />
+                            <select
+                              value={f.type}
+                              onChange={(e) => void changeFieldType(f.key, e.target.value as OpLogCustomFieldType)}
+                              className="rounded-md border border-slate-300 bg-transparent px-1.5 py-1.5 text-xs text-slate-700 outline-none dark:border-slate-600 dark:text-slate-100"
+                              title={OPLOG_FIELD_TYPE_TITLE[f.type]}
+                            >
+                              {OPLOG_FIELD_TYPE_OPTIONS.map((t) => (
+                                <option key={t} value={t}>{OPLOG_FIELD_TYPE_LABEL[t]}</option>
+                              ))}
+                            </select>
+                            <button
+                              onClick={() => void removeField(f.key)}
+                              className="rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30"
+                              title="删除该自定义项（已填历史数据保留）"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                          {f.type === 'select' && (
+                            <input
+                              defaultValue={(f.options || []).join('，')}
+                              onBlur={(e) => void updateFieldOptions(f.key, e.target.value)}
+                              placeholder="可选项（逗号或换行分隔，失焦保存）"
+                              title="下拉选项：逗号或换行分隔"
+                              className="mt-1 w-full rounded-md border border-dashed border-slate-300 bg-transparent px-2.5 py-1 text-xs text-slate-600 outline-none focus:border-sky-500 dark:border-slate-600 dark:text-slate-300"
+                            />
+                          )}
+                        </div>
+                      ))}
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={newFieldName}
+                          onChange={(e) => setNewFieldName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void addField() }}
+                          placeholder="新自定义项名称，如：处理窗口"
+                          className="flex-1 rounded-md border border-dashed border-slate-300 bg-transparent px-2.5 py-1.5 text-sm text-slate-800 outline-none focus:border-sky-500 dark:border-slate-600 dark:text-slate-100"
+                        />
+                        <select
+                          value={newFieldType}
+                          onChange={(e) => setNewFieldType(e.target.value as OpLogCustomFieldType)}
+                          className="rounded-md border border-slate-300 bg-transparent px-1.5 py-1.5 text-xs text-slate-700 outline-none dark:border-slate-600 dark:text-slate-100"
+                          title={OPLOG_FIELD_TYPE_TITLE[newFieldType]}
+                        >
+                          {OPLOG_FIELD_TYPE_OPTIONS.map((t) => (
+                            <option key={t} value={t}>{OPLOG_FIELD_TYPE_LABEL[t]}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => void addField()}
+                          disabled={libBusy || !newFieldName.trim()}
+                          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-sky-600 transition hover:bg-sky-50 disabled:opacity-40 dark:text-sky-400 dark:hover:bg-sky-900/30"
+                        >
+                          <Plus className="h-3.5 w-3.5" /> 添加
+                        </button>
+                      </div>
+                      {newFieldType === 'select' && (
+                        <input
+                          value={newFieldOptions}
+                          onChange={(e) => setNewFieldOptions(e.target.value)}
+                          placeholder="下拉可选项（逗号或换行分隔，如：高，中，低）"
+                          className="w-full rounded-md border border-dashed border-slate-300 bg-transparent px-2.5 py-1 text-xs text-slate-600 outline-none focus:border-sky-500 dark:border-slate-600 dark:text-slate-300"
+                        />
+                      )}
+                    </div>
+                  </section>
                 )}
+                <section>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={extraCfgDraft.enabled}
+                      onChange={(e) => setExtraCfgDraft((d) => ({ ...d, enabled: e.target.checked }))}
+                      className="h-4 w-4 accent-sky-600"
+                    />
+                    启用项目自定义列（从{canManageLibrary ? '上方' : ''}自定义项库勾选；停用后保持动态扩展列方式）
+                  </label>
+                  {extraCfgDraft.enabled && (
+                    <div className="mt-2 space-y-1.5">
+                      {extraCfgDraft.keys.length === 0 && (
+                        <p className="rounded-lg border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                          尚未勾选自定义项，请点击下方字段名前的「＋」加入
+                        </p>
+                      )}
+                      {extraCfgDraft.keys.map((key, i) => {
+                        const f = fieldLibrary.find((x) => x.key === key)
+                        return (
+                          <div key={key} className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5 dark:bg-slate-700/50">
+                            <span className="w-5 shrink-0 text-right font-mono text-xs text-slate-400">{i + 1}</span>
+                            <span className="flex-1 truncate text-sm text-slate-800 dark:text-slate-100">{f?.label || key}</span>
+                            <span className={cn('shrink-0 rounded-full px-1.5 py-0.5 text-[10px]', OPLOG_FIELD_TYPE_BADGE[f?.type || 'text'])}>{OPLOG_FIELD_TYPE_LABEL[f?.type || 'text']}</span>
+                            <button
+                              disabled={i === 0}
+                              onClick={() => setExtraCfgDraft((d) => { const keys = [...d.keys]; [keys[i - 1], keys[i]] = [keys[i], keys[i - 1]]; return { ...d, keys } })}
+                              className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 dark:hover:bg-slate-600"
+                              title="上移"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              disabled={i === extraCfgDraft.keys.length - 1}
+                              onClick={() => setExtraCfgDraft((d) => { const keys = [...d.keys]; [keys[i], keys[i + 1]] = [keys[i + 1], keys[i]]; return { ...d, keys } })}
+                              className="rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 disabled:opacity-30 dark:hover:bg-slate-600"
+                              title="下移"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setExtraCfgDraft((d) => ({ ...d, keys: d.keys.filter((k) => k !== key) }))}
+                              className="rounded p-1 text-slate-400 transition hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30"
+                              title="取消勾选"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )
+                      })}
+                      {fieldLibrary.filter((f) => !extraCfgDraft.keys.includes(f.key)).length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {fieldLibrary.filter((f) => !extraCfgDraft.keys.includes(f.key)).map((f) => (
+                            <button
+                              key={f.key}
+                              onClick={() => {
+                                if (extraCfgDraft.keys.length >= OP_LOG_MAX_EXTRA_COLUMNS) {
+                                  notify('error', `最多勾选 ${OP_LOG_MAX_EXTRA_COLUMNS} 个自定义项`)
+                                  return
+                                }
+                                setExtraCfgDraft((d) => ({ ...d, keys: [...d.keys, f.key] }))
+                              }}
+                              className="flex items-center gap-1 rounded-full border border-slate-300 px-2 py-0.5 text-xs text-slate-600 transition hover:border-sky-400 hover:text-sky-600 dark:border-slate-600 dark:text-slate-300"
+                              title={OPLOG_FIELD_TYPE_TITLE[f.type]}
+                            >
+                              <Plus className="h-3 w-3" /> {f.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
               </div>
               <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">
                 <Button variant="ghost" size="sm" onClick={() => setExtraCfgOpen(false)}>取消</Button>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  disabled={extraCfgSaving || (extraCfgDraft.enabled && extraCfgDraft.columns.some((c) => !c.label.trim()))}
-                  onClick={saveExtraCfg}
-                  title={extraCfgDraft.enabled && extraCfgDraft.columns.some((c) => !c.label.trim()) ? '启用的列名不能为空' : undefined}
-                >
+                <Button variant="primary" size="sm" disabled={extraCfgSaving} onClick={saveExtraCfg}>
                   {extraCfgSaving ? '保存中…' : '保存'}
                 </Button>
               </div>
@@ -1494,6 +1771,36 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
           </div>,
           document.body,
         )}
+
+      {/* 一键清空确认弹窗：二次确认后才打删除标记（软删除） */}
+      {clearOpen &&
+        createPortal(
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => { if (!clearing) setClearOpen(false) }}>
+            <div className="w-full max-w-md rounded-xl bg-white shadow-2xl dark:bg-slate-800" onClick={(e) => e.stopPropagation()}>
+              <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-700">
+                <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">确认清空台账</h3>
+                <p className="mt-1.5 text-sm text-slate-500 dark:text-slate-400">
+                  将按当前筛选范围（<span className="font-medium text-slate-700 dark:text-slate-200">{clearScopeLabel}</span>）给{' '}
+                  <span className="font-medium text-red-600 dark:text-red-400">{clearableCount} 条</span> 台账记录打上删除标记：
+                </p>
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-slate-500 dark:text-slate-400">
+                  <li>列表、统计与导出将不再显示这些记录（软删除，数据仍保留在数据库中）</li>
+                  <li>这些记录自动入账的工时会被一并清除（手动登记的工时不受影响）</li>
+                  <li>清空操作会写入项目操作日志留痕</li>
+                </ul>
+              </div>
+              <div className="flex items-center justify-end gap-2 px-5 py-3">
+                <Button variant="ghost" size="sm" disabled={clearing} onClick={() => setClearOpen(false)}>
+                  取消
+                </Button>
+                <Button variant="danger" size="sm" disabled={clearing} onClick={handleClearAll}>
+                  {clearing ? '清空中…' : `确认清空 ${clearableCount} 条`}
+                </Button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </div>
   )
 }
@@ -1531,6 +1838,28 @@ export function SortTh({
   )
 }
 
+// ===== 自定义项类型展示元信息（字段库管理/勾选列表/表单控件共用，模块级常量）=====
+const OPLOG_FIELD_TYPE_LABEL: Record<OpLogCustomFieldType, string> = {
+  text: '文本', textarea: '多行文本', number: '数字', date: '日期', select: '下拉', url: '链接',
+}
+const OPLOG_FIELD_TYPE_TITLE: Record<OpLogCustomFieldType, string> = {
+  text: '文本型：普通文本',
+  textarea: '多行文本型：支持换行的长文本',
+  number: '数字型：统一保留 2 位小数，Excel 导出为数值单元格',
+  date: '日期型：表单日期选择器，导入自动归一化，导出真日期格式',
+  select: '下拉单选：在字段库中配置可选项',
+  url: '链接型：导出为可点击超链接',
+}
+const OPLOG_FIELD_TYPE_BADGE: Record<OpLogCustomFieldType, string> = {
+  text: 'bg-slate-200 text-slate-600 dark:bg-slate-600 dark:text-slate-200',
+  textarea: 'bg-slate-200 text-slate-600 dark:bg-slate-600 dark:text-slate-200',
+  number: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  date: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+  select: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
+  url: 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300',
+}
+const OPLOG_FIELD_TYPE_OPTIONS: OpLogCustomFieldType[] = ['text', 'textarea', 'number', 'date', 'select', 'url']
+
 // ===== 新增/编辑对话框 =====
 function OpLogDialog({
   editing,
@@ -1540,6 +1869,8 @@ function OpLogDialog({
   setExtraRows,
   extraKeySuggestions,
   extraConfig,
+  /** 全局自定义项字段库：按字段类型渲染对应表单控件（date/number/select/textarea/url/text） */
+  customFields,
   projects,
   projectWritable,
   lockProject,
@@ -1559,6 +1890,8 @@ function OpLogDialog({
   extraKeySuggestions: string[]
   /** 表单所属项目的台账自定义列配置（null = 自由模式，沿用旧动态列行为） */
   extraConfig: OpLogExtraConfig | null
+  /** 全局自定义项字段库（来自字段库管理）：决定扩展字段值的控件类型 */
+  customFields: OpLogCustomField[]
   projects: Project[]
   /** 项目可登记判断（v1.9.3：负责人或成员，admin 全权；与父组件/后端同口径） */
   projectWritable: (pid: string | null | undefined) => boolean
@@ -1577,6 +1910,8 @@ function OpLogDialog({
 }) {
   const set = (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch }))
   const inputCls = 'h-9 rounded-lg border border-bg-border bg-bg-soft px-3 text-sm text-text-primary outline-none focus:border-brand focus:ring-1 focus:ring-brand/40'
+  // 扩展字段 key → 字段库定义：按类型渲染值控件
+  const fieldMeta = new Map(customFields.map((f) => [f.key, f]))
 
   // 关联任务选项：台账所属项目下的全部任务（工时入账载体，v1.9.4）
   const projectTasks = useAsync<Task[]>(
@@ -1984,16 +2319,31 @@ function OpLogDialog({
                           }}
                           placeholder="字段名"
                         />
-                        <input
-                          className={inputCls + ' flex-1'}
-                          value={row.value}
-                          onChange={(e) => {
+                        {(() => {
+                          const meta = fieldMeta.get(row.key)
+                          const t: OpLogCustomFieldType = meta?.type || 'text'
+                          const onVal = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
                             const rows = [...extraRows]
                             rows[i] = { ...rows[i], value: e.target.value }
                             setExtraRows(rows)
-                          }}
-                          placeholder="字段值"
-                        />
+                          }
+                          const cls = inputCls + ' flex-1'
+                          if (t === 'date') return <input className={cls} type="date" value={row.value} onChange={onVal} title="日期型字段" />
+                          if (t === 'number') return <input className={cls} type="number" step="0.01" inputMode="decimal" value={row.value} onChange={onVal} placeholder="数字（保留 2 位小数）" title="数字型：保存后统一保留 2 位小数" />
+                          if (t === 'select') {
+                            return (
+                              <select className={cls} value={row.value} onChange={onVal} title="下拉单选">
+                                <option value="">请选择</option>
+                                {(meta?.options || []).map((o) => (
+                                  <option key={o} value={o}>{o}</option>
+                                ))}
+                              </select>
+                            )
+                          }
+                          if (t === 'textarea') return <textarea className={cls + ' h-9 min-h-9 resize-y py-2'} rows={1} value={row.value} onChange={onVal} placeholder="多行内容" title="多行文本型" />
+                          if (t === 'url') return <input className={cls} type="url" value={row.value} onChange={onVal} placeholder="https://" title="链接型：导出为可点击超链接" />
+                          return <input className={cls} type="text" value={row.value} onChange={onVal} placeholder="字段值" />
+                        })()}
                         <button
                           onClick={() => setExtraRows(extraRows.filter((_, j) => j !== i))}
                           className="rounded-md p-1.5 text-muted transition hover:bg-danger/15 hover:text-danger"

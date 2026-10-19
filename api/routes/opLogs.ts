@@ -1,16 +1,17 @@
 import { Router, type Response, type NextFunction } from 'express'
 import multer from 'multer'
 import ExcelJS from 'exceljs'
-import { opLogRepo, projectRepo, userRepo, taskRepo, activityLogRepo, resolveHourlyRate } from '../repository/repo.ts'
+import { opLogRepo, projectRepo, userRepo, taskRepo, activityLogRepo, customFieldRepo, resolveHourlyRate } from '../repository/repo.ts'
 import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.ts'
 import { ApiError, genId } from '../lib/utils.ts'
+import { z } from 'zod'
 import db, { type SqlRow } from '../db.ts'
 import { llm } from '../lib/llm.ts'
 import { buildAnalyzeMessages, buildChatMessages, type ChatTurn } from '../lib/prompts.ts'
 import { recallCases, toAiCase } from '../lib/recallCases.ts'
 import { scopedProjectIds } from './stats.ts'
 import type { Task, User } from '../../shared/types.ts'
-import { OP_LOG_MAX_EXTRA_COLUMNS } from '../../shared/types.ts'
+import { OP_LOG_MAX_EXTRA_COLUMNS, OP_LOG_DEFAULT_COLUMN_ORDER } from '../../shared/types.ts'
 
 export const router = Router()
 router.use(authRequired)
@@ -42,6 +43,11 @@ export function assertExtraFieldsMatchConfig(extraFields: unknown, config: { col
   }
 }
 
+/** 自定义项显示名：以全局字段库为准（项目配置存的是保存时快照，库改名后模板/导入/导出即时生效） */
+function extraFieldLabel(key: string, fallback: string): string {
+  return customFieldRepo.findByKey(key)?.label || fallback
+}
+
 /** 表头重复列名检测：返回出现 2 次及以上的列名（保留首次出现顺序，空名跳过） */
 export function findDuplicateHeaders(labels: string[]): string[] {
   const seen = new Set<string>()
@@ -56,6 +62,55 @@ export function findDuplicateHeaders(labels: string[]): string[] {
   }
   return dups
 }
+
+// ===== 台账全局自定义项库：事先统一定义字段（管理员），各项目从中勾选启用 =====
+// 列表：登录用户均可读（项目勾选/表单渲染需要）
+router.get('/op-logs/custom-fields', (req: AuthRequest, res: Response) => {
+  res.json({ fields: customFieldRepo.findAll() })
+})
+
+// 新增：仅管理员（key 取显示名去空白，创建后不变）
+router.post('/op-logs/custom-fields', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (userRepo.findById(req.userId!)?.role !== 'admin') throw new ApiError(403, '仅系统管理员可维护台账自定义项库')
+    const parsed = z.object({
+      label: z.string().trim().min(1, '自定义项名称不能为空').max(50, '名称过长（最多 50 字）'),
+      type: z.enum(['text', 'textarea', 'number', 'date', 'select', 'url']).default('text'),
+      // select 类型的可选项：每项去空白后 1-50 字，最多 50 项
+      options: z.array(z.string().trim().min(1).max(50, '选项过长（最多 50 字）')).max(50, '选项最多 50 个').optional(),
+    }).safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    res.json({ field: customFieldRepo.create(parsed.data.label, parsed.data.type, parsed.data.options) })
+  } catch (e) { next(e) }
+})
+
+// 修改显示名/类型/选项：仅管理员（key 不变，历史数据不受影响）
+router.patch('/op-logs/custom-fields/:key', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (userRepo.findById(req.userId!)?.role !== 'admin') throw new ApiError(403, '仅系统管理员可维护台账自定义项库')
+    const key = req.params.key
+    if (!customFieldRepo.findByKey(key)) throw new ApiError(404, '自定义项不存在')
+    const parsed = z.object({
+      label: z.string().trim().min(1, '自定义项名称不能为空').max(50, '名称过长（最多 50 字）').optional(),
+      type: z.enum(['text', 'textarea', 'number', 'date', 'select', 'url']).optional(),
+      options: z.array(z.string().trim().min(1).max(50, '选项过长（最多 50 字）')).max(50, '选项最多 50 个').optional(),
+    }).safeParse(req.body)
+    if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
+    const field = customFieldRepo.update(key, parsed.data)
+    res.json({ field })
+  } catch (e) { next(e) }
+})
+
+// 删除：仅管理员（项目勾选中的残留引用在展示层回退为字段键，不影响历史数据）
+router.delete('/op-logs/custom-fields/:key', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (userRepo.findById(req.userId!)?.role !== 'admin') throw new ApiError(403, '仅系统管理员可维护台账自定义项库')
+    if (!customFieldRepo.findByKey(req.params.key)) throw new ApiError(404, '自定义项不存在')
+    customFieldRepo.remove(req.params.key)
+    res.json({ success: true })
+  } catch (e) { next(e) }
+})
+
 
 // 固定列定义（导出/模板/导入共用的列顺序）：序号永远第 1 列
 const FIXED_COLUMNS = [
@@ -74,6 +129,47 @@ const FIXED_COLUMNS = [
   { key: 'cause', label: '原因' },
   { key: 'solution', label: '解决方案' },
 ] as const
+
+// 固定列导出宽度 + 登记日期（非 FIXED_COLUMNS 但参与导出，跟随用户列序）
+const FIXED_COL_WIDTH: Record<string, number> = {
+  category: 12, status: 10, proposer: 10, system: 14, department: 12, logDate: 12,
+  recorder: 10, problem: 30, completionDate: 12, hours: 8, detail: 36, cause: 24, solution: 36, createdAt: 12,
+}
+function fixedLabel(k: string): string {
+  if (k === 'createdAt') return '登记日期'
+  return FIXED_COLUMNS.find((c) => c.key === k)?.label ?? k
+}
+
+/**
+ * 导出统一列序（与前端 OpLogsPanel 的 mergeColumnOrder 完全同语义）：
+ * 用户「列设置」保存的顺序优先；缺失标准列按 OP_LOG_DEFAULT_COLUMN_ORDER 的默认相对位置插入；
+ * 缺失自定义列尾部追加。固定列、项目列与自定义列（extra:*）按界面列设置的位置交错输出，
+ * 保证导出表头顺序与界面一模一样（含自定义列被移到中间的场景）。
+ * 'seq' 永远第 1 列，不参与合并（单独写）。
+ */
+export function mergeExportOrder(userOrder: readonly string[], extraKeys: readonly string[], includeProject: boolean): string[] {
+  const defaults: string[] = OP_LOG_DEFAULT_COLUMN_ORDER.filter((k) => k !== 'project' || includeProject)
+  const extras = extraKeys.map((k) => `extra:${k}`)
+  const valid = new Set<string>([...defaults, ...extras])
+  const order = userOrder.filter((k) => valid.has(k))
+  for (const k of defaults) {
+    if (order.includes(k)) continue
+    const defIdx = defaults.indexOf(k)
+    let pos = 0
+    for (let i = 0; i < order.length; i++) {
+      const d = defaults.indexOf(order[i])
+      if (d >= 0 && d < defIdx) pos = i + 1
+    }
+    order.splice(pos, 0, k)
+  }
+  for (const e of extras) if (!order.includes(e)) order.push(e)
+  return order
+}
+
+/** 导出固定列序（兼容旧调用/测试锚点）：仅标准列部分，等价于 mergeExportOrder(userOrder, [], false) */
+export function mergeFixedExportOrder(userOrder: readonly string[]): string[] {
+  return mergeExportOrder(userOrder, [], false)
+}
 
 const VALID_STATUS = ['待处理', '处理中', '暂停', '取消', '已完成', '已关闭']
 
@@ -132,6 +228,14 @@ function cellText(v: ExcelJS.CellValue): string | null {
   }
   const s = String(v).trim()
   return s || null
+}
+
+/**
+ * 表头归一化（导入容错匹配）：去全部空白 + 全角括号/冒号转半角。
+ * 中文 Excel 常见全角「（）：」与额外空格（如「实绩工数（小时）」），与配置列名精确比对会静默丢列。
+ */
+function normHeader(s: string): string {
+  return s.replace(/\s+/g, '').replace(/（/g, '(').replace(/）/g, ')').replace(/：/g, ':')
 }
 
 function normDate(v: ExcelJS.CellValue): string | null {
@@ -460,6 +564,53 @@ router.delete('/op-logs/:id', (req: AuthRequest, res: Response, next: NextFuncti
   } catch (e) { next(e) }
 })
 
+// ===== 一键清空（按当前筛选范围批量软删除）=====
+router.post('/op-logs/clear', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const b = req.body || {}
+    // 二次确认护栏：请求体必须显式携带 confirm=true，防止误调用
+    if (b.confirm !== true) throw new ApiError(400, '缺少二次确认标记（confirm），未执行清空')
+    const projectId = b.projectId ? String(b.projectId) : undefined
+    const user = userRepo.findById(req.userId!)
+    // 权限：项目内清空 = 项目负责人或管理员；跨项目清空 = 仅系统管理员（与单条删除同口径）
+    if (projectId) {
+      assertOpLogDeleteAccess(user, projectId)
+    } else if (user?.role !== 'admin') {
+      throw new ApiError(403, '跨项目清空仅系统管理员可操作')
+    }
+    const logs = opLogRepo.find({
+      projectId,
+      projectIds: scopeToProjectIds(scopeOf(req), projectId),
+      category: b.category || undefined,
+      status: b.status || undefined,
+      system: b.system || undefined,
+      department: b.department || undefined,
+      keyword: b.keyword || undefined,
+      dateFrom: b.dateFrom || undefined,
+      dateTo: b.dateTo || undefined,
+    })
+    if (logs.length === 0) throw new ApiError(400, '当前筛选范围内没有可清空的台账记录')
+    const ids = logs.map((l) => l.id)
+    const delTx = db.transaction(() => {
+      // 先解除工时联动（与单条删除一致：自动入账清除，手动登记工时不受影响）
+      const CHUNK = 500
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const part = ids.slice(i, i + CHUNK)
+        db.prepare(`DELETE FROM task_hours WHERE op_log_id IN (${part.map(() => '?').join(',')})`).run(...part)
+      }
+      opLogRepo.softDeleteMany(ids, req.userId)
+    })
+    delTx()
+    // 审计留痕：受影响项目各记一条（v1.10.0 oplog_clear）
+    const byProject = new Map<string, number>()
+    for (const l of logs) if (l.projectId) byProject.set(l.projectId, (byProject.get(l.projectId) || 0) + 1)
+    for (const [pid, n] of byProject) {
+      activityLogRepo.create(pid, req.userId!, 'oplog_clear', `一键清空台账 ${n} 条（按当前筛选范围）`)
+    }
+    res.json({ ok: true, cleared: ids.length })
+  } catch (e) { next(e) }
+})
+
 // ===== Excel 模板下载 =====
 router.get('/op-logs/template.xlsx', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -483,7 +634,7 @@ router.get('/op-logs/template.xlsx', (req: AuthRequest, res: Response, next: Nex
     if (tplConfig) {
       tplConfig.columns.forEach((c, i) => {
         const cell = ws.getCell(1, extraStartCol + i)
-        cell.value = c.label
+        cell.value = extraFieldLabel(c.key, c.label)
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } }
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF70AD47' } }
         cell.alignment = { vertical: 'middle', horizontal: 'center' }
@@ -523,9 +674,12 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
     assertOpLogRegisterAccess(userRepo.findById(req.userId!), projectId)
     // 项目级自定义列配置：启用时表头按「列名→字段键」映射（顺序由配置决定）；未定义列不再入库，仅提示
     const extraConfig = projectRepo.findById(projectId)?.oplogExtraColumns
+    // 映射键做表头归一化：文件表头「实绩工数（小时）」（全角括号/带空格）也能匹配配置列「实绩工数(小时)」
     const extraLabelMap = extraConfig?.enabled
-      ? new Map(extraConfig.columns.map((c) => [c.label, c.key]))
+      ? new Map(extraConfig.columns.map((c) => [normHeader(extraFieldLabel(c.key, c.label)), c.key]))
       : null
+    // 自定义项字段元信息（类型/选项）：导入时按类型归一化值
+    const fieldMetaMap = new Map(customFieldRepo.findAll().map((f) => [f.key, f]))
 
     const workbook = new ExcelJS.Workbook()
     await workbook.xlsx.load(file.buffer)
@@ -541,7 +695,7 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
       const row = ws.getRow(r)
       for (let c = 1; c <= Math.min(30, ws.columnCount); c++) {
         const label = cellText(row.getCell(c).value)
-        if (label && FIXED_COLUMNS.some((col) => col.label === label)) {
+        if (label && FIXED_COLUMNS.some((col) => normHeader(col.label) === normHeader(label))) {
           matchCount++
         }
       }
@@ -562,27 +716,29 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
       const label = cellText(cell.value)
       if (!label) return
       headerLabels.push(label)
-      if (label === '登记日期') { createdAtCol = colNumber; return }
-      const fixed = FIXED_COLUMNS.find((c) => c.label === label)
+      const normLabel = normHeader(label)
+      if (normLabel === '登记日期') { createdAtCol = colNumber; return }
+      const fixed = FIXED_COLUMNS.find((c) => normHeader(c.label) === normLabel)
       if (fixed) {
         colMap.set(colNumber, fixed.key)
       } else {
         // 序号列（№, No, 序号, 编号）映射为序号字段；跳过模板自带的自定义列示例
-        const lowerLabel = label.toLowerCase()
+        const lowerLabel = normLabel.toLowerCase()
         if (['自定义列示例'].includes(lowerLabel)) return
         if (['№', 'no', 'no.', '序号', '编号'].includes(lowerLabel)) {
           colMap.set(colNumber, 'seq')
           return
         }
-        // 项目已启用自定义列配置：仅映射配置中定义的列名（与列位置无关），未定义列提示后丢弃
+        // 项目已启用自定义列配置：仅映射配置中定义的列名（与列位置无关，归一化匹配），未定义列提示后丢弃
         if (extraLabelMap) {
-          const key = extraLabelMap.get(label)
+          const key = extraLabelMap.get(normLabel)
           if (key) colMap.set(colNumber, `extra:${key}`)
           else if (!unknownColumns.includes(label)) unknownColumns.push(label)
           return
         }
         if (!unknownColumns.includes(label)) unknownColumns.push(label)
-        colMap.set(colNumber, `extra:${label}`)
+        // 自由列模式：入库键同样归一化，避免全角/空格变体造成同名字段多份键
+        colMap.set(colNumber, `extra:${normLabel}`)
       }
     })
     // 表头重复列名校验：重复列会导致后列覆盖前列（数据静默丢失），直接阻断
@@ -590,9 +746,10 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
     if (dupHeaders.length > 0) {
       throw new ApiError(400, `表头存在重复列名：${dupHeaders.join('、')}，请去除重复列后重新导入`)
     }
-    // 配置模式：文件缺少的已定义自定义列（提示非阻断，未填写的列按空值导入）
+    // 配置模式：文件缺少的已定义自定义列（提示非阻断，未填写的列按空值导入；归一化比对防全角/空格误报）
+    const normHeaderSet = new Set(headerLabels.map(normHeader))
     const missingColumns = extraConfig && extraLabelMap
-      ? extraConfig.columns.map((c) => c.label).filter((l) => !headerLabels.includes(l))
+      ? extraConfig.columns.map((c) => extraFieldLabel(c.key, c.label)).filter((l) => !normHeaderSet.has(normHeader(l)))
       : []
     // 自定义列数量上限：仅在自由列模式（项目未启用配置）下生效；配置模式由项目定义约束
     if (!extraLabelMap && unknownColumns.length > OP_LOG_MAX_EXTRA_COLUMNS) {
@@ -643,8 +800,25 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
           const n = t ? parseInt(t, 10) : NaN
           if (Number.isFinite(n)) data.seq = n
         } else if (key.startsWith('extra:')) {
-          const t = cellText(raw)
-          if (t) { extra[key.slice(6)] = t; hasContent = true }
+          const fk = key.slice(6)
+          const ftype = fieldMetaMap.get(fk)?.type
+          if (ftype === 'date') {
+            // 日期型：Excel 日期单元格 cellText 会丢弃（Date → null），走 normDate 归一化
+            const d = normDate(raw)
+            if (d) { extra[fk] = d; hasContent = true }
+          } else if (ftype === 'number') {
+            // 数字型：归一为 2 位小数（兼容数值单元格/文本/千分位）；不可解析时按原文入库（非阻断）
+            const s = typeof raw === 'number' ? String(raw) : cellText(raw)
+            if (s) {
+              const n = Number(String(s).replace(/,/g, '').trim())
+              extra[fk] = Number.isFinite(n) && String(s).trim() !== '' ? n.toFixed(2) : s
+              hasContent = true
+            }
+          } else {
+            // text/textarea/select/url：普通文本
+            const t = cellText(raw)
+            if (t) { extra[fk] = t; hasContent = true }
+          }
         } else {
           const t = cellText(raw)
           if (t) { data[key] = t; hasContent = true }
@@ -770,7 +944,6 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
     const exportProject = q.projectId ? projectRepo.findById(String(q.projectId)) : undefined
     const exportConfig = exportProject?.oplogExtraColumns?.enabled ? exportProject.oplogExtraColumns : null
     const extraKeys: string[] = exportConfig ? exportConfig.columns.map((c) => c.key) : []
-    const extraHeaders: string[] = exportConfig ? exportConfig.columns.map((c) => c.label) : []
     if (!exportConfig) {
       for (const log of logs) {
         for (const k of Object.keys(log.extraFields || {})) {
@@ -778,26 +951,58 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
           if (!extraKeys.includes(k)) extraKeys.push(k)
         }
       }
-      extraHeaders.push(...extraKeys)
+    }
+
+    // 列序来源（优先级）：导出请求显式携带（前端当前界面列序，最高优先）→ 账号持久化列序 → 默认序
+    let userOrder: string[] = req.userId ? userRepo.findById(req.userId)?.oplogColumnOrder ?? [] : []
+    const qColOrder = (q.colOrder as string | undefined) || ''
+    if (qColOrder) {
+      try {
+        const arr: unknown = JSON.parse(qColOrder)
+        if (Array.isArray(arr) && arr.length > 0 && arr.every((k) => typeof k === 'string')) userOrder = arr as string[]
+      } catch { /* 非法参数回退账号持久化列序 */ }
+    }
+    // 跨项目导出（未按项目筛选）时包含「项目」列，便于区分归属；序号永远第 1 列
+    const includeProject = !q.projectId
+    const projName = new Map<string, string>()
+    if (includeProject) {
+      for (const p of projectRepo.findAll()) projName.set(p.id, p.name)
+    }
+    // 统一交错列序（与前端 mergeColumnOrder 同语义）：固定列、项目列与自定义列都按界面列设置的位置输出
+    const unifiedOrder = mergeExportOrder(userOrder, extraKeys, includeProject)
+    // 自定义列表头：以全局字段库显示名为准；动态模式键即表头
+    const extraLabel = (k: string) => extraFieldLabel(k, exportConfig?.columns.find((c) => c.key === k)?.label || k)
+    // 自定义列单元格处理：以全局字段库类型为准（date=真日期、number=数值 2 位小数、url=超链接，其余按文本）
+    const fieldMetaMap = new Map(customFieldRepo.findAll().map((f) => [f.key, f]))
+    const excelDate = (v: unknown): Date | null => {
+      if (v instanceof Date) return v
+      const s = String(v ?? '').trim()
+      if (/^\d+(\.\d+)?$/.test(s)) {
+        const n = Number(s)
+        if (n > 20000 && n < 80000) return new Date(Date.UTC(1899, 11, 30) + n * 86400000)
+        return null
+      }
+      const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/)
+      return m ? new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))) : null
+    }
+    // 数字型：解析为数值（容错千分位逗号）；不可解析返回 null（导出按文本回退）
+    const excelNumber = (v: unknown): number | null => {
+      if (typeof v === 'number') return Number.isFinite(v) ? v : null
+      const s = String(v ?? '').trim().replace(/,/g, '')
+      if (!s || !/^-?\d+(\.\d+)?$/.test(s)) return null
+      const n = Number(s)
+      return Number.isFinite(n) ? n : null
     }
 
     const workbook = new ExcelJS.Workbook()
     workbook.creator = '项目管理系统'
     const ws = workbook.addWorksheet('运维台账')
 
-    // 跨项目导出（未按项目筛选）时附加「项目」列，便于区分归属；序号永远第 1 列
-    const includeProject = !q.projectId
-    const projName = new Map<string, string>()
-    if (includeProject) {
-      for (const p of projectRepo.findAll()) projName.set(p.id, p.name)
-    }
-
     const headers = [
       '序号',
-      ...(includeProject ? ['项目'] : []),
-      ...FIXED_COLUMNS.filter((c) => c.key !== 'seq').map((c) => c.label),
-      ...extraHeaders,
-      '登记日期',
+      ...unifiedOrder.map((k) =>
+        k.startsWith('extra:') ? extraLabel(k.slice(6)) : k === 'project' ? '项目' : fixedLabel(k),
+      ),
     ]
     const headerRow = ws.addRow(headers)
     headerRow.eachCell((cell) => {
@@ -816,21 +1021,61 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
       已关闭: 'FFF2F2F2',
     }
 
+    // 单元格取值：按列键从台账记录取数
+    const colValue = (log: SqlRow, k: string): string | number | null => {
+      switch (k) {
+        case 'category': return log.category
+        case 'status': return log.status
+        case 'proposer': return log.proposer
+        case 'system': return log.system
+        case 'department': return log.department
+        case 'logDate': return log.logDate
+        case 'recorder': return log.recorder
+        case 'problem': return log.problem
+        case 'completionDate': return log.completionDate || ''
+        case 'hours': return log.hours
+        case 'detail': return log.detail
+        case 'cause': return log.cause
+        case 'solution': return log.solution
+        case 'createdAt': return log.createdAt ? log.createdAt.slice(0, 10) : ''
+        default: return ''
+      }
+    }
+
     logs.forEach((log) => {
-      const values: (string | number | null)[] = [
-        log.seq ?? '',
-        ...(includeProject ? [log.projectId ? projName.get(log.projectId) || '未知项目' : '未关联'] : []),
-        log.category, log.status, log.proposer, log.system, log.department,
-        log.logDate, log.recorder, log.problem, log.completionDate || '',
-        log.hours, log.detail, log.cause, log.solution,
-      ]
-      for (const k of extraKeys) values.push(log.extraFields[k] || '')
-      // 登记日期：记录录入系统的时间（取日期部分）
-      values.push(log.createdAt ? log.createdAt.slice(0, 10) : '')
+      // 第 1 列固定序号；其后按统一交错列序输出（项目列/自定义列保持在界面设置的位置）
+      const values: (string | number | null)[] = [log.seq ?? '']
+      for (const k of unifiedOrder) {
+        if (k === 'project') values.push(log.projectId ? projName.get(log.projectId) || '未知项目' : '未关联')
+        else if (k.startsWith('extra:')) values.push(log.extraFields?.[k.slice(6)] || '')
+        else values.push(colValue(log, k))
+      }
       const row = ws.addRow(values)
-      // 状态着色（状态列：序号1 + 项目列(0/1) + 分类之后 = 跨项目时第4列，否则第3列）
-      const statusCell = row.getCell(includeProject ? 4 : 3)
+      // 状态着色：序号占第 1 列，状态列在统一列序中的位置
+      const statusCell = row.getCell(unifiedOrder.indexOf('status') + 2)
       statusCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: statusColors[log.status] || 'FFFFFFFF' } }
+      // 自定义列按字段类型写入特殊单元格：日期（可排序/筛选）、数值（2 位小数）、超链接（可点击）；历史未归一化值一并转换
+      unifiedOrder.forEach((k, j) => {
+        if (!k.startsWith('extra:')) return
+        const fk = k.slice(6)
+        const ftype = fieldMetaMap.get(fk)?.type
+        if (ftype !== 'date' && ftype !== 'number' && ftype !== 'url') return
+        const cell = row.getCell(j + 2)
+        if (ftype === 'date') {
+          const d = excelDate(log.extraFields?.[fk])
+          if (!d) return
+          cell.value = d
+          cell.numFmt = 'yyyy-mm-dd'
+        } else if (ftype === 'number') {
+          const n = excelNumber(log.extraFields?.[fk])
+          if (n === null) return
+          cell.value = n
+          cell.numFmt = '0.00'
+        } else {
+          const s = String(log.extraFields?.[fk] ?? '').trim()
+          if (/^https?:\/\/\S+$/i.test(s)) cell.value = { text: s, hyperlink: s }
+        }
+      })
     })
 
     // 边框
@@ -849,14 +1094,9 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
       }
     }
 
-    // 列宽：序号8 + 13 个业务固定列；跨项目导出时项目列插在序号之后
-    const widths = [8, 12, 10, 10, 14, 12, 12, 10, 30, 12, 8, 36, 24, 36]
-    if (includeProject) widths.splice(1, 0, 14)
+    // 列宽：序号8 + 按统一列序（固定列预设宽度、项目列 14、自定义列 18）
+    const widths = [8, ...unifiedOrder.map((k) => (k.startsWith('extra:') ? 18 : k === 'project' ? 14 : FIXED_COL_WIDTH[k] ?? 12))]
     widths.forEach((w, i) => ws.getColumn(i + 1).width = w)
-    // 扩展列与登记日期列的起始列号（1-based）：序号(1) + 项目列(0/1) + 13 个业务固定列之后
-    const extraStartCol = (includeProject ? 1 : 0) + FIXED_COLUMNS.length + 1
-    extraKeys.forEach((_, i) => ws.getColumn(extraStartCol + i).width = 18)
-    ws.getColumn(extraStartCol + extraKeys.length).width = 12
     ws.views = [{ state: 'frozen', ySplit: 1 }]
 
     const filename = encodeURIComponent(`运维台账_${new Date().toISOString().slice(0, 10)}.xlsx`)
