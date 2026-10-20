@@ -24,6 +24,19 @@ function assertCanLogHours(userId: string, taskId: string): void {
 // 生效优先级：个人时薪(u.hourly_rate) > 人员类别时薪(uc.hourly_rate) > 项目角色默认价 > 0
 // 成本口径：优先用工时登记时冻结的快照单价(th.rate_snapshot)，改价不追溯历史
 
+// 累计实绩超出计划 20% 的提示文案（单日登记不设限、不拦截；累计为任务全口径，含台账自动入账；
+// 未设计划工时永不提示）。作为响应字段返回，由前端 toast 提示。
+function overtimeWarning(taskId: string, title: string, planned: number): string | null {
+  if (!(planned > 0)) return null
+  const row = db.prepare(
+    'SELECT COALESCE(SUM(actual_hours), 0) as total FROM task_hours WHERE task_id = ?',
+  ).get(taskId) as SqlRow | undefined
+  const total = Math.round((Number(row?.total) || 0) * 100) / 100
+  const threshold = Math.round(planned * 1.2 * 100) / 100
+  if (total <= threshold + 1e-9) return null
+  return `「${title}」累计实绩 ${total}h 已超过计划 ${planned}h 的 20%（阈值 ${threshold}h），请关注任务进度`
+}
+
 const createSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式不正确'),
   plannedHours: z.number().optional().default(0),
@@ -55,20 +68,7 @@ router.post('/tasks/:taskId/hours', (req: AuthRequest, res: Response, next: Next
     assertCanLogHours(req.userId!, task.id)
     const parsed = createSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
-    // 单日单任务上限：当天累计实际工时不超过任务计划工时的 20%（未设计划工时不限制）
-    // 快速登记为累加语义，需按「已有 + 本次」的当天合计校验（排除台账自动入账记录，二者独立成条）
-    const planned = task.plannedHours || 0
-    if (parsed.data.actualHours > 0 && planned > 0) {
-      const existing = db.prepare(
-        'SELECT actual_hours FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL',
-      ).get(task.id, req.userId!, parsed.data.date) as SqlRow | undefined
-      const curActual = existing ? Number(existing.actual_hours) || 0 : 0
-      const cap = Math.round(planned * 0.2 * 10) / 10
-      const total = Math.round((curActual + parsed.data.actualHours) * 10) / 10
-      if (total > cap + 1e-9) {
-        throw new ApiError(400, `「${task.title}」${parsed.data.date} 当天累计 ${total}h 超过单日上限 ${cap}h（计划工时 ${planned}h × 20%），请分摊到其他日期`)
-      }
-    }
+    // 单日登记不设上限；若任务累计实绩已超计划 20%，随响应提示（不拦截）
     const record = hoursRepo.create({
       taskId: task.id,
       userId: req.userId!,
@@ -78,7 +78,7 @@ router.post('/tasks/:taskId/hours', (req: AuthRequest, res: Response, next: Next
       billedHours: parsed.data.billedHours,
       description: parsed.data.description,
     })
-    res.status(201).json({ record })
+    res.status(201).json({ record, warning: overtimeWarning(task.id, task.title, task.plannedHours || 0) })
   } catch (e) { next(e) }
 })
 
@@ -92,7 +92,9 @@ router.patch('/hours/:recordId', (req: AuthRequest, res: Response, next: NextFun
     const parsed = updateSchema.safeParse(req.body)
     if (!parsed.success) throw new ApiError(400, parsed.error.issues[0].message)
     hoursRepo.update(record.id, parsed.data)
-    res.json({ record: hoursRepo.findById(record.id)! })
+    const updated = hoursRepo.findById(record.id)!
+    const task = taskRepo.findById(updated.taskId)
+    res.json({ record: updated, warning: task ? overtimeWarning(task.id, task.title, task.plannedHours || 0) : null })
   } catch (e) { next(e) }
 })
 
@@ -228,14 +230,6 @@ router.post('/hours/bulk', (req: AuthRequest, res: Response, next: NextFunction)
         const task = taskRepo.findById(entry.taskId)
         if (!task) throw new ApiError(404, `任务不存在: ${entry.taskId}`)
         assertCanLogHours(userId, entry.taskId)
-        // 单日单任务上限：任务计划工时的 20%（未设计划工时的任务不限制）
-        const planned = task.plannedHours || 0
-        if (entry.hours > 0 && planned > 0) {
-          const cap = Math.round(planned * 0.2 * 10) / 10
-          if (entry.hours > cap + 1e-9) {
-            throw new ApiError(400, `「${task.title}」${entry.date} 登记 ${entry.hours}h 超过单日上限 ${cap}h（计划工时 ${planned}h × 20%），请分摊到多天或调整任务计划工时`)
-          }
-        }
         // 合计口径：格子显示当天全部手动记录之和，保存时对全部匹配记录整体操作（而非单条替换）
         const existingRows = db.prepare(
           'SELECT * FROM task_hours WHERE task_id = ? AND user_id = ? AND date = ? AND op_log_id IS NULL ORDER BY created_at, id',
@@ -271,7 +265,16 @@ router.post('/hours/bulk', (req: AuthRequest, res: Response, next: NextFunction)
       }
     })
     tx()
-    res.json({ result: { created, updated, removed, unchanged } })
+    // 本批有登记的任务：累计实绩超计划 20% 时随响应提示（不拦截保存）
+    const warnings: string[] = []
+    const loggedTaskIds = new Set(parsed.data.entries.filter((e) => e.hours > 0).map((e) => e.taskId))
+    for (const taskId of loggedTaskIds) {
+      const task = taskRepo.findById(taskId)
+      if (!task) continue
+      const w = overtimeWarning(task.id, task.title, task.plannedHours || 0)
+      if (w) warnings.push(w)
+    }
+    res.json({ result: { created, updated, removed, unchanged }, warnings })
   } catch (e) { next(e) }
 })
 

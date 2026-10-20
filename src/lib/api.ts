@@ -324,9 +324,9 @@ export const api = {
   listTaskHours: (taskId: string) =>
     request<{ hours: TaskHours[] }>(`/api/tasks/${taskId}/hours`),
   createTaskHours: (taskId: string, data: { date: string; plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }) =>
-    request<{ record: TaskHours }>(`/api/tasks/${taskId}/hours`, { method: 'POST', body: JSON.stringify(data) }),
+    request<{ record: TaskHours; warning?: string | null }>(`/api/tasks/${taskId}/hours`, { method: 'POST', body: JSON.stringify(data) }),
   updateTaskHours: (recordId: string, data: { plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }) =>
-    request<{ record: TaskHours }>(`/api/hours/${recordId}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    request<{ record: TaskHours; warning?: string | null }>(`/api/hours/${recordId}`, { method: 'PATCH', body: JSON.stringify(data) }),
   deleteTaskHours: (recordId: string) =>
     request<{ ok: boolean }>(`/api/hours/${recordId}`, { method: 'DELETE' }),
   // 按周工时表：rows = 我负责的任务行（q=搜索我负责的其他任务），cells = 本周已有登记
@@ -335,9 +335,9 @@ export const api = {
       rows: { taskId: string; taskTitle: string; taskStatus: string; plannedHours: number; projectId: string; projectName: string }[]
       cells: { taskId: string; date: string; plannedHours: number; actualHours: number; billedHours: number; hasNote: boolean }[]
     }>(`/api/me/timesheet?weekStart=${weekStart}${q ? `&q=${encodeURIComponent(q)}` : ''}`),
-  // 批量提交周表：每格 hours=0 表示清除该任务当天登记
+  // 批量提交周表：每格 hours=0 表示清除该任务当天登记；warnings = 累计实绩超计划 20% 的任务提示
   bulkHours: (entries: { taskId: string; date: string; hours: number }[]) =>
-    request<{ result: { created: number; updated: number; removed: number; unchanged: number } }>('/api/hours/bulk', { method: 'POST', body: JSON.stringify({ entries }) }),
+    request<{ result: { created: number; updated: number; removed: number; unchanged: number }; warnings?: string[] }>('/api/hours/bulk', { method: 'POST', body: JSON.stringify({ entries }) }),
   // 工时报表：服务端按项目/人员/日期过滤，并返回任务计划工时汇总与按天基线
   listStatsHours: (projectId?: string, userId?: string, startDate?: string, endDate?: string) => {
     const params: string[] = []

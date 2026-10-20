@@ -27,10 +27,6 @@ const BILL_FOLLOW_KEY = 'hours_bill_follows_actual'
 
 const PRESETS = [0.5, 1, 2, 4, 8]
 
-// 单日单任务上限：任务计划工时的 20%（四舍五入到 0.1h；未设计划工时不限制）
-const capOf = (plannedHours?: number | null) =>
-  plannedHours && plannedHours > 0 ? Math.round(plannedHours * 0.2 * 10) / 10 : Infinity
-
 export default function HoursLogDialog({ open, task, onClose, onSaved }: Props) {
   const notify = useAppStore((s) => s.notify)
   const me = useAppStore((s) => s.user)
@@ -101,22 +97,21 @@ export default function HoursLogDialog({ open, task, onClose, onSaved }: Props) 
       notify('error', '请填写日期和至少一项工时')
       return
     }
-    // 单日 20% 上限预检（前端校验本次填写；同日已有登记的累计由后端兜底）
-    const cap = capOf(selectedTask.plannedHours)
-    if (actual > 0 && actual > cap + 1e-9) {
-      notify('error', `「${selectedTask.title}」单日最多登记 ${cap}h（计划工时 ${selectedTask.plannedHours}h × 20%），请分摊到其他日期`)
-      return
-    }
     setSaving(true)
     try {
-      await api.createTaskHours(selectedTask.id, {
+      // 单日不限量；累计实绩超计划 20% 时后端随响应返回提示（不拦截）
+      const { warning } = await api.createTaskHours(selectedTask.id, {
         date,
         plannedHours: Number(plannedHours) || 0,
         actualHours: actual,
         billedHours: billed,
         description: description.trim(),
       })
-      notify('success', `已为「${selectedTask.title}」登记工时`)
+      if (warning) {
+        notify('warning', `已登记。${warning}`)
+      } else {
+        notify('success', `已为「${selectedTask.title}」登记工时`)
+      }
       onSaved?.()
       onClose()
     } catch (e) {
@@ -220,14 +215,14 @@ export default function HoursLogDialog({ open, task, onClose, onSaved }: Props) 
                 <Input
                   type="number"
                   min="0"
-                  max={selectedTask && (selectedTask.plannedHours || 0) > 0 ? capOf(selectedTask.plannedHours) : 24}
+                  max="24"
                   step="0.5"
                   placeholder="0"
                   value={actualHours}
                   onChange={(e) => setActualHours(e.target.value)}
                 />
                 {selectedTask && (selectedTask.plannedHours || 0) > 0 && (
-                  <p className="mt-1 text-[11px] text-warn/80">单日上限 {capOf(selectedTask.plannedHours)}h（计划工时 {selectedTask.plannedHours}h × 20%），可分摊到多天</p>
+                  <p className="mt-1 text-[11px] text-muted">计划工时 {selectedTask.plannedHours}h，单日不限；累计实绩超出计划 20% 时会提示</p>
                 )}
                 <div className="mt-1.5 flex gap-1.5">
                   {PRESETS.map((h) => (

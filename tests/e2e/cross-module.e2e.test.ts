@@ -235,7 +235,7 @@ describe('跨模块端到端集成（临时库 + 真实服务）', () => {
       status: 'in_progress',
       priority: 'high',
       assigneeId: memberId,
-      // 计划 25h → 单日 20% 上限 5h，容纳后续 5h/3h 的单日登记
+      // 计划 25h：工时登记单日不限量，累计 8h 远低于 30h 提示阈值，不触发超限提示
       plannedHours: 25,
     }, adminToken)
     expect(r.status).toBe(201)

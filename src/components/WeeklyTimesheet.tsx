@@ -1,6 +1,6 @@
 // 按周工时表：行 = 我负责的任务（进行中/待办 + 近期有登记的已完成任务），列 = 周一到周日
 // 每格 = 该任务当天的实际工时总数；提交时只发送有变动的格子（替换语义，见 /api/hours/bulk）
-// 限制：单日单任务不超过计划工时的 20%（未设计划工时不限）；计费工时跟随内部工时（自定义过计费比例的记录不受影响）
+// 单日不限量；任务累计实绩超计划 20% 时保存响应返回 warnings（前端 toast 提示，不拦截）
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Loader2, Plus, Search, X } from 'lucide-react'
@@ -32,9 +32,6 @@ interface Row {
   projectId: string
   projectName: string
 }
-
-// 单日单任务上限 = 计划工时 × 20%（未设计划工时不限制）
-const capOf = (r: Row) => (r.plannedHours > 0 ? Math.round(r.plannedHours * 0.2 * 10) / 10 : Infinity)
 
 export default function WeeklyTimesheet({ onSaved }: { onSaved?: () => void }) {
   const notify = useAppStore((s) => s.notify)
@@ -126,26 +123,20 @@ export default function WeeklyTimesheet({ onSaved }: { onSaved?: () => void }) {
 
   async function submit() {
     if (dirtyEntries.length === 0) { notify('info', '没有需要保存的改动'); return }
-    // 单日上限预检：计划工时 × 20%
-    const offender = dirtyEntries.find((e) => {
-      const row = rows.find((r) => r.taskId === e.taskId)
-      return row && e.hours > capOf(row) + 1e-9
-    })
-    if (offender) {
-      const row = rows.find((r) => r.taskId === offender.taskId)!
-      const cap = capOf(row)
-      notify('error', `「${row.taskTitle}」${offender.date} 最多 ${cap}h/天（计划工时 ${row.plannedHours}h × 20%），请分摊到多天`)
-      return
-    }
     setSaving(true)
     try {
-      const { result } = await api.bulkHours(dirtyEntries)
+      // 单日不限量；累计实绩超计划 20% 的任务随响应 warnings 返回（已保存，仅提示）
+      const { result, warnings } = await api.bulkHours(dirtyEntries)
       const parts = [
         result.created ? `新增 ${result.created}` : '',
         result.updated ? `更新 ${result.updated}` : '',
         result.removed ? `清除 ${result.removed}` : '',
       ].filter(Boolean).join('、')
-      notify('success', parts ? `工时表已保存（${parts}）` : '工时表已保存')
+      if (warnings && warnings.length > 0) {
+        notify('warning', `工时表已保存${parts ? `（${parts}）` : ''}；${warnings.join('；')}`)
+      } else {
+        notify('success', parts ? `工时表已保存（${parts}）` : '工时表已保存')
+      }
       setEdits({})
       await sheet.reload()
       onSaved?.()
@@ -210,13 +201,13 @@ export default function WeeklyTimesheet({ onSaved }: { onSaved?: () => void }) {
                   <div className="truncate text-xs text-text-primary" title={`${r.projectName} · ${r.taskTitle}`}>{r.taskTitle}</div>
                   <div className="truncate text-[10px] text-muted">
                     {r.projectName}
-                    {r.plannedHours > 0 && <span className="ml-1 text-warn/80">上限 {capOf(r)}h/天</span>}
+                    {r.plannedHours > 0 && <span className="ml-1 text-muted">计划 {r.plannedHours}h</span>}
                   </div>
                 </td>
                 {weekDates.map((d) => (
                   <td key={d} className="px-1 py-1.5 text-center">
                     <input
-                      type="number" min="0" max={r.plannedHours > 0 ? capOf(r) : 24} step="0.5" placeholder="·"
+                      type="number" min="0" max="24" step="0.5" placeholder="·"
                       className={inputCls}
                       value={cellValue(r.taskId, d)}
                       onChange={(e) => setCell(r.taskId, d, e.target.value)}
@@ -287,7 +278,7 @@ export default function WeeklyTimesheet({ onSaved }: { onSaved?: () => void }) {
       </div>
 
       <p className="mt-2 text-[11px] leading-relaxed text-muted">
-        只显示你负责的任务；每格为该任务当天实际工时，单日不超过任务计划工时的 20%（未设计划工时不限）。清空格子提交即删除当天登记；备注请用「快速登记」。
+        只显示你负责的任务；每格为该任务当天实际工时，单日不限量，累计实绩超出任务计划工时 20% 时保存后会提示。清空格子提交即删除当天登记；备注请用「快速登记」。
       </p>
     </div>
   )

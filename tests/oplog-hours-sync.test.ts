@@ -146,7 +146,7 @@ describe('台账工时入账（v1.9.4 方案 A：台账为录入入口，工时�
       expect(rows[1].actual_hours).toBe(8)
     })
 
-    it('单条 8h 不受 20% 上限影响（豁免由入账路径天然保证）', () => {
+    it('单条 8h 正常入账（工时登记已无单日上限，入账不受任何拦截）', () => {
       const tid = seedTask(db, projectId, { title: '有计划的任务', plannedHours: 10 })
       const log = opLogRepo.create(userId, { projectId, problem: '整日运维', hours: 8, logDate: '2026-09-25', taskId: tid })
       syncOpLogHours(log, tid)
