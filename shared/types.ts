@@ -303,6 +303,10 @@ export interface WorkloadItem {
   total: number
   done: number
   inProgress: number
+  /** 计划工时合计（任务 planned_hours，小时；与 total 同一范围/窗口的任务集） */
+  plannedHours: number
+  /** 实绩工时合计（task_hours.actual_hours，小时；按工时日期落入时间窗口） */
+  actualHours: number
 }
 
 export interface Template {

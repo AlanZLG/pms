@@ -159,14 +159,13 @@ router.get('/projects/:projectId/progress.xlsx', async (req: AuthRequest, res: R
     const doneCount = tasks.filter((t) => t.status === 'done').length
     const completionRate = totalTasks > 0 ? Math.round((doneCount / totalTasks) * 100) : 0
 
-    // 计算工时
-    let totalPlannedHours = 0
+    // 计算工时（口径与统计页「成员工作量·按工时」一致：计划工时取任务字段，实绩按任务归属汇总 task_hours）
+    const totalPlannedHours = tasks.reduce((s, t) => s + (t.plannedHours ?? 0), 0)
     let totalActualHours = 0
     for (const task of tasks) {
       const hourRows = db.prepare(
-        'SELECT COALESCE(SUM(planned_hours), 0) as planned, COALESCE(SUM(actual_hours), 0) as actual FROM task_hours WHERE task_id = ?',
-      ).get(task.id) as { planned: number; actual: number }
-      totalPlannedHours += Number(hourRows.planned) || 0
+        'SELECT COALESCE(SUM(actual_hours), 0) as actual FROM task_hours WHERE task_id = ?',
+      ).get(task.id) as { actual: number }
       totalActualHours += Number(hourRows.actual) || 0
     }
 
@@ -183,22 +182,20 @@ router.get('/projects/:projectId/progress.xlsx', async (req: AuthRequest, res: R
       return user ? { name: user.name, role: m.role, isOutsourced: user.isOutsourced, id: user.id } : null
     }).filter(Boolean) as { name: string; role: string; isOutsourced: boolean; id: string }[]
 
-    // 为每位成员计算工时和任务
+    // 为每位成员计算工时和任务（按任务归属：工时归任务指派人，不论登记人是谁）
     const memberDetails = members.map((member) => {
-      const memberTasks = tasks.filter((t) => {
-        const user = userRepo.findById(t.assigneeId || '')
-        return user?.id === member.id
-      })
+      const memberTasks = tasks.filter((t) => t.assigneeId === member.id)
       const doneTasks = memberTasks.filter((t) => t.status === 'done')
-      let plannedHours = 0
+      // 计划工时 = 名下任务的计划工时合计；实绩工时 = 名下任务的 task_hours.actual_hours 合计（含台账自动入账）
+      const plannedHours = Math.round(memberTasks.reduce((s, t) => s + (t.plannedHours ?? 0), 0) * 100) / 100
       let actualHours = 0
       for (const task of memberTasks) {
         const hr = db.prepare(
-          'SELECT COALESCE(SUM(planned_hours), 0) as planned, COALESCE(SUM(actual_hours), 0) as actual FROM task_hours WHERE task_id = ?',
-        ).get(task.id) as { planned: number; actual: number }
-        plannedHours += Number(hr.planned) || 0
+          'SELECT COALESCE(SUM(actual_hours), 0) as actual FROM task_hours WHERE task_id = ?',
+        ).get(task.id) as { actual: number }
         actualHours += Number(hr.actual) || 0
       }
+      actualHours = Math.round(actualHours * 100) / 100
       return {
         name: member.name,
         role: member.role === 'owner' ? '项目负责人' : '成员',
@@ -289,9 +286,9 @@ router.get('/projects/:projectId/progress.xlsx', async (req: AuthRequest, res: R
     const hoursHeader = wsHours.addRow(['指标', '数值'])
     applyHeaderStyle(hoursHeader)
     const hoursRows: (string | number)[][] = [
-      ['计划工时(小时)', Number(totalPlannedHours.toFixed(1))],
-      ['实际工时(小时)', Number(totalActualHours.toFixed(1))],
-      ['工时偏差(小时)', Number((totalActualHours - totalPlannedHours).toFixed(1))],
+      ['计划工时(小时)', Number(totalPlannedHours.toFixed(2))],
+      ['实际工时(小时)', Number(totalActualHours.toFixed(2))],
+      ['工时偏差(小时)', Number((totalActualHours - totalPlannedHours).toFixed(2))],
       ['工时偏差率', totalPlannedHours > 0 ? `${(((totalActualHours - totalPlannedHours) / totalPlannedHours) * 100).toFixed(1)}%` : '0%'],
     ]
     hoursRows.forEach((r) => wsHours.addRow(r))
@@ -327,9 +324,9 @@ router.get('/projects/:projectId/progress.xlsx', async (req: AuthRequest, res: R
         md.name,
         md.role,
         md.isOutsourced ? '是' : '否',
-        Number(md.plannedHours.toFixed(1)),
-        Number(md.actualHours.toFixed(1)),
-        Number((md.actualHours - md.plannedHours).toFixed(1)),
+        Number(md.plannedHours.toFixed(2)),
+        Number(md.actualHours.toFixed(2)),
+        Number((md.actualHours - md.plannedHours).toFixed(2)),
         md.taskCount,
         md.doneCount,
       ])
@@ -358,8 +355,8 @@ router.get('/projects/:projectId/progress.xlsx', async (req: AuthRequest, res: R
         if (u) userMap.set(u.id, u.name)
       }
       const hr = db.prepare(
-        'SELECT COALESCE(SUM(planned_hours), 0) as planned, COALESCE(SUM(actual_hours), 0) as actual FROM task_hours WHERE task_id = ?',
-      ).get(t.id) as { planned: number; actual: number }
+        'SELECT COALESCE(SUM(actual_hours), 0) as actual FROM task_hours WHERE task_id = ?',
+      ).get(t.id) as { actual: number }
 
       const row = wsTasks.addRow([
         i + 1,
@@ -369,8 +366,8 @@ router.get('/projects/:projectId/progress.xlsx', async (req: AuthRequest, res: R
         userMap.get(t.assigneeId || '') || '未分配',
         t.startDate ? new Date(t.startDate) : '',
         t.dueDate ? new Date(t.dueDate) : '',
-        Number(hr.planned.toFixed(1)),
-        Number(hr.actual.toFixed(1)),
+        Number((t.plannedHours ?? 0).toFixed(2)),
+        Number(hr.actual.toFixed(2)),
         t.labels.join('、'),
       ])
 

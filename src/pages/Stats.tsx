@@ -17,9 +17,17 @@ import { STATUS_COLORS_HEX } from '@/lib/constants'
 
 const ranges = [{ v: 7, l: '近 7 天' }, { v: 14, l: '近 14 天' }, { v: 30, l: '近 30 天' }] as const
 
+// 成员工作量统计口径：任务数 / 工时（计划 vs 实绩）
+const workloadMetrics = [
+  { v: 'count', l: '按任务数' },
+  { v: 'hours', l: '按工时' },
+] as const
+type WorkloadMetric = (typeof workloadMetrics)[number]['v']
+
 export default function Stats() {
   const [range, setRange] = useState<number>(14)
   const [projectId, setProjectId] = useState<string>('')
+  const [workloadMetric, setWorkloadMetric] = useState<WorkloadMetric>('count')
   const overview = useSwr<StatsOverview>(`overview:${projectId}:${range}`, () => api.overview(projectId || undefined, range))
   const projects = useSwr<Project[]>('projects:list:names', () => api.listProjects().then((r) => r.projects))
   const workload = useSwr<WorkloadItem[]>(`workload:${projectId}:${range}`, () => api.workload(projectId || undefined, range).then((r) => r.workload))
@@ -51,6 +59,16 @@ export default function Stats() {
     () => (overview.data?.trend || []).map((t) => ({ ...t, day: t.date.slice(5) })),
     [overview.data],
   )
+
+  // 成员工作量图数据：任务数口径（总/进行中/已完成）或工时口径（计划/实绩）
+  const workloadChartData = useMemo(() => {
+    const items = workload.data || []
+    return items.map((i) =>
+      workloadMetric === 'count'
+        ? { userName: i.userName, total: i.total, inProgress: i.inProgress, done: i.done }
+        : { userName: i.userName, plannedHours: i.plannedHours, actualHours: i.actualHours },
+    )
+  }, [workload.data, workloadMetric])
 
   const isInitialLoading = overview.loading && projects.loading && workload.loading
 
@@ -250,9 +268,25 @@ export default function Stats() {
 
       {/* 成员工作量 */}
       <Card className="p-5">
-        <h3 className="mb-4 flex items-center gap-2 font-display text-lg text-text-primary">
-          <Users2 className="h-5 w-5 text-brand-soft" /> 成员工作量
-        </h3>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
+            <Users2 className="h-5 w-5 text-brand-soft" /> 成员工作量
+          </h3>
+          <div className="flex gap-1 rounded-lg bg-bg-soft p-1">
+            {workloadMetrics.map((m) => (
+              <button
+                key={m.v}
+                onClick={() => setWorkloadMetric(m.v)}
+                className={cn(
+                  'rounded-md px-2.5 py-1 text-xs font-medium transition',
+                  workloadMetric === m.v ? 'bg-brand text-text-primary' : 'text-muted hover:text-text-secondary',
+                )}
+              >
+                {m.l}
+              </button>
+            ))}
+          </div>
+        </div>
         {workload.loading ? (
           <UiSkeleton className="h-64" />
         ) : workload.data && workload.data.length > 0 ? (
@@ -260,7 +294,7 @@ export default function Stats() {
           <div className="max-h-72 overflow-y-auto pr-1">
             <ResponsiveContainer width="100%" height={Math.max(288, workload.data.length * 44)}>
               <BarChart
-                data={workload.data}
+                data={workloadChartData}
                 layout="vertical"
                 margin={{ left: 60, right: 20 }}
                 maxBarSize={28}
@@ -284,11 +318,25 @@ export default function Stats() {
                   }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="total" name="总任务" fill="#6366F1" radius={[0, 6, 6, 0]} />
-                <Bar dataKey="inProgress" name="进行中" fill="#F59E0B" radius={[0, 6, 6, 0]} />
-                <Bar dataKey="done" name="已完成" fill="#10B981" radius={[0, 6, 6, 0]} />
+                {workloadMetric === 'count' ? (
+                  <>
+                    <Bar dataKey="total" name="总任务" fill="#6366F1" radius={[0, 6, 6, 0]} />
+                    <Bar dataKey="inProgress" name="进行中" fill="#F59E0B" radius={[0, 6, 6, 0]} />
+                    <Bar dataKey="done" name="已完成" fill="#10B981" radius={[0, 6, 6, 0]} />
+                  </>
+                ) : (
+                  <>
+                    <Bar dataKey="plannedHours" name="计划工时" fill="#6366F1" radius={[0, 6, 6, 0]} />
+                    <Bar dataKey="actualHours" name="实绩工时" fill="#10B981" radius={[0, 6, 6, 0]} />
+                  </>
+                )}
               </BarChart>
             </ResponsiveContainer>
+            {workloadMetric === 'hours' && (
+              <p className="mt-2 text-xs text-muted">
+                单位：小时。计划工时 = 窗口内任务的计划工时合计（未填计 0）；实绩工时 = 工时登记（含台账自动入账）按工时日期合计。
+              </p>
+            )}
           </div>
         ) : (
           <EmptyState title="暂无成员数据" />

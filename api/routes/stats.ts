@@ -1,6 +1,7 @@
 // 统计路由
 
 import { Router, type Response, type NextFunction } from 'express'
+import db from '../db.ts'
 import { projectRepo, taskRepo, userRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import type { User, WorkloadItem, Project, Task, ProjectHealth } from '../../shared/types.ts'
@@ -127,6 +128,76 @@ router.get('/burndown', (req: AuthRequest, res: Response, next: NextFunction) =>
   } catch (e) { next(e) }
 })
 
+// 成员工作量（双口径：任务数 + 工时）
+export function computeWorkload(user: User, projectId: string, days: number): WorkloadItem[] {
+  const since = days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : ''
+  const scope = resolveScope(user, projectId)
+  // 越权访问指定项目 → 空结果
+  if (scope && scope.length === 0) return []
+
+  let users = userRepo.findAll()
+  // 非管理员只展示自己 + 自己可见项目里的成员
+  if (scope) {
+    const memberIds = new Set<string>([user.id])
+    projectRepo.findAll().forEach((p) => {
+      if (scope.includes(p.id)) p.members.forEach((m) => memberIds.add(m.userId))
+    })
+    users = users.filter((u) => memberIds.has(u.id))
+  }
+
+  const getSortOrder = (u: User) => {
+    if (u.role === 'admin') return 0
+    if (u.role === 'finance') return 1
+    if (!u.isOutsourced) return 3
+    return 4
+  }
+
+  users.sort((a, b) => {
+    const orderA = getSortOrder(a)
+    const orderB = getSortOrder(b)
+    if (orderA !== orderB) return orderA - orderB
+    return a.name.localeCompare(b.name)
+  })
+
+  // 实绩工时合计：按任务归属（assignee）汇总 task_hours.actual_hours（含台账自动入账），
+  // 与 Excel「项目进度报告」成员工作量同口径；限定可见项目，时间窗口按工时日期（date 为 YYYY-MM-DD）
+  const actualHoursOf = (userId: string): number => {
+    const clauses = ['t.assignee_id = ?']
+    const params: unknown[] = [userId]
+    if (scope) {
+      clauses.push(`t.project_id IN (${scope.map(() => '?').join(',')})`)
+      params.push(...scope)
+    }
+    if (since) {
+      clauses.push('th.date >= ?')
+      params.push(since.slice(0, 10))
+    }
+    const row = db.prepare(
+      `SELECT COALESCE(SUM(th.actual_hours), 0) AS h FROM task_hours th JOIN tasks t ON t.id = th.task_id WHERE ${clauses.join(' AND ')}`,
+    ).get(...params) as { h: number | string } | undefined
+    return Math.round((Number(row?.h) || 0) * 100) / 100
+  }
+
+  const round2 = (n: number) => Math.round(n * 100) / 100
+
+  return users.map((u) => {
+    let all = taskRepo.findByAssigneeAll(u.id, projectId || undefined)
+      // 任务必须属于请求者可见的项目
+      .filter((t) => !scope || scope.includes(t.projectId))
+    // 时间窗口：只统计窗口内有动态的任务（新建或有过更新，保持 已完成/进行中 ⊆ 总任务 的口径）
+    if (since) all = all.filter((t) => t.updatedAt >= since)
+    return {
+      userId: u.id, userName: u.name, avatarColor: u.avatarColor,
+      total: all.length,
+      done: all.filter((t) => t.status === 'done').length,
+      inProgress: all.filter((t) => t.status === 'in_progress').length,
+      // 计划工时：同一任务集的 planned_hours 合计（未填计划工时的任务计 0）
+      plannedHours: round2(all.reduce((s, t) => s + (t.plannedHours ?? 0), 0)),
+      actualHours: actualHoursOf(u.id),
+    }
+  })
+}
+
 // 成员工作量
 router.get('/workload', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
@@ -134,49 +205,7 @@ router.get('/workload', (req: AuthRequest, res: Response, next: NextFunction) =>
     const projectId = (req.query.projectId as string) || ''
     // 时间窗口（天）：缺省/0 = 不过滤（全量）；1-90 有效
     const days = Math.min(Math.max(parseInt(req.query.days as string, 10) || 0, 0), 90)
-    const since = days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : ''
-    const scope = resolveScope(user, projectId)
-    // 越权访问指定项目 → 空结果
-    if (scope && scope.length === 0) return res.json({ workload: [] })
-
-    let users = userRepo.findAll()
-    // 非管理员只展示自己 + 自己可见项目里的成员
-    if (scope) {
-      const memberIds = new Set<string>([user!.id])
-      projectRepo.findAll().forEach((p) => {
-        if (scope.includes(p.id)) p.members.forEach((m) => memberIds.add(m.userId))
-      })
-      users = users.filter((u) => memberIds.has(u.id))
-    }
-
-    const getSortOrder = (u: User) => {
-      if (u.role === 'admin') return 0
-      if (u.role === 'finance') return 1
-      if (!u.isOutsourced) return 3
-      return 4
-    }
-
-    users.sort((a, b) => {
-      const orderA = getSortOrder(a)
-      const orderB = getSortOrder(b)
-      if (orderA !== orderB) return orderA - orderB
-      return a.name.localeCompare(b.name)
-    })
-
-    const items: WorkloadItem[] = users.map((u) => {
-      let all = taskRepo.findByAssigneeAll(u.id, projectId || undefined)
-        // 任务必须属于请求者可见的项目
-        .filter((t) => !scope || scope.includes(t.projectId))
-      // 时间窗口：只统计窗口内有动态的任务（新建或有过更新，保持 已完成/进行中 ⊆ 总任务 的口径）
-      if (since) all = all.filter((t) => t.updatedAt >= since)
-      return {
-        userId: u.id, userName: u.name, avatarColor: u.avatarColor,
-        total: all.length,
-        done: all.filter((t) => t.status === 'done').length,
-        inProgress: all.filter((t) => t.status === 'in_progress').length,
-      }
-    })
-    res.json({ workload: items })
+    res.json({ workload: computeWorkload(user!, projectId, days) })
   } catch (e) { next(e) }
 })
 
