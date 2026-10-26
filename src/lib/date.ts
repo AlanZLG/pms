@@ -53,3 +53,15 @@ export function dueLabel(d: string | null, done = false): { text: string; tone: 
 export function firstChar(name: string): string {
   return name?.trim().slice(0, 1) || '?'
 }
+
+// 日期值转 date-input 用的本地 YYYY-MM-DD。不能用 slice(0, 10) / toISOString（UTC 语义）：
+// 东八区下甘特图拖拽产生的本地零点 ISO（如 2026-10-21T16:00:00.000Z = 本地 10-22 00:00）
+// 会被切成 10-21，导致编辑保存后截止日期悄悄提前一天、次日即显示逾期
+export function toDateInputValue(d: string | null | undefined): string {
+  if (!d) return ''
+  try {
+    return format(new Date(d), 'yyyy-MM-dd')
+  } catch {
+    return ''
+  }
+}

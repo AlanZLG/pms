@@ -6,6 +6,7 @@ import { Button, Input, Textarea } from '@/components/ui'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
+import { toDateInputValue } from '@/lib/date'
 import { useAppStore } from '@/stores/app'
 import { Sparkles, Save, Trash2, X } from 'lucide-react'
 import { sortUsers } from '@/lib/utils'
@@ -65,8 +66,8 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
       setPriority(task?.priority || 'medium')
       setAssigneeId(task?.assigneeId || null)
       setLabels(task?.labels.join(', ') || '')
-      setStartDate(task?.startDate?.slice(0, 10) || initialStartDate?.slice(0, 10) || '')
-      setDueDate(task?.dueDate?.slice(0, 10) || initialDueDate?.slice(0, 10) || '')
+      setStartDate(toDateInputValue(task?.startDate || initialStartDate))
+      setDueDate(toDateInputValue(task?.dueDate || initialDueDate))
       setPlannedHours(task?.plannedHours?.toString() || '')
       setSelectedTemplateId('')
       setShowSaveTemplate(false)
@@ -138,8 +139,8 @@ export default function TaskDialog({ open, onClose, projectId, task, defaultStat
           .split(/[,，]/)
           .map((s) => s.trim())
           .filter(Boolean),
-        startDate: startDate ? new Date(startDate).toISOString() : null,
-        dueDate: dueDate ? new Date(dueDate).toISOString() : null,
+        startDate: startDate || null,
+        dueDate: dueDate || null,
         plannedHours: plannedHours ? parseFloat(plannedHours) : null,
       }
       if (task) {

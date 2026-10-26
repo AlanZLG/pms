@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dueLabel } from '../src/lib/date'
+import { dueLabel, toDateInputValue } from '../src/lib/date'
 
 const DAY = 86400000
 
@@ -27,5 +27,28 @@ describe('dueLabel 日级逾期判定', () => {
 
   it('无截止日期 → 无截止', () => {
     expect(dueLabel(null)).toEqual({ text: '无截止', tone: 'none' })
+  })
+})
+
+// 编辑回填回归：date-input 回填必须按本地日期切片，
+// 甘特拖拽产生的「本地零点 ISO」（东八区 = UTC 前一天 16:00）不能被 slice(0,10) 切成前一天
+describe('toDateInputValue 本地日期切片', () => {
+  it('本地零点 ISO（甘特拖拽存值）→ 本地日期，而非 UTC 前一天', () => {
+    // 2026-10-22 本地 00:00 (+8) = 2026-10-21T16:00:00.000Z
+    expect(toDateInputValue('2026-10-21T16:00:00.000Z')).toBe('2026-10-22')
+  })
+
+  it('UTC 零点 ISO（弹窗提交存值）→ 本地当天', () => {
+    expect(toDateInputValue('2026-10-22T00:00:00.000Z')).toBe('2026-10-22')
+  })
+
+  it('纯日期字符串原样返回', () => {
+    expect(toDateInputValue('2026-10-22')).toBe('2026-10-22')
+  })
+
+  it('空值与非法值返回空串', () => {
+    expect(toDateInputValue(null)).toBe('')
+    expect(toDateInputValue('')).toBe('')
+    expect(toDateInputValue('not-a-date')).toBe('')
   })
 })
