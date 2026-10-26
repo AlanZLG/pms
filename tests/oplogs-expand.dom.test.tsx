@@ -7,7 +7,11 @@ import { render, screen, within, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { OpLog } from '../shared/types'
 
-const { seedLogs } = vi.hoisted(() => ({ seedLogs: [] as unknown[] }))
+const { seedLogs, seedProjects, currentUser } = vi.hoisted(() => ({
+  seedLogs: [] as unknown[],
+  seedProjects: [] as unknown[],
+  currentUser: { value: { id: 'u1', name: '测试用户', role: 'admin' } as Record<string, unknown> },
+}))
 
 // 注意：tsconfig include 不含 tests，vite-tsconfig-paths 不为测试文件解析 @/ 别名，
 // 因此 vi.mock 必须用相对路径（与 src 内部 @/ 导入解析到同一模块）才能正确拦截
@@ -17,7 +21,9 @@ vi.mock('../src/lib/api', () => ({
     listOpLogs: vi.fn(async () => ({ logs: seedLogs })),
     getOpLogStats: vi.fn(async () => ({ stats: [] })),
     getOpLogOptions: vi.fn(async () => ({ categories: [], systems: [], departments: [] })),
-    listProjects: vi.fn(async () => ({ projects: [] })),
+    listProjects: vi.fn(async () => ({ projects: seedProjects })),
+    listOpLogCustomFields: vi.fn(async () => ({ fields: [] })),
+    listTasks: vi.fn(async () => ({ tasks: [] })),
     getOpLogAiStatus: vi.fn(async () => ({ enabled: false, model: '' })),
   },
 }))
@@ -26,7 +32,7 @@ vi.mock('../src/stores/app', () => ({
   useAppStore: (sel: (s: unknown) => unknown) =>
     sel({
       notify: vi.fn(),
-      user: { id: 'u1', name: '测试用户', role: 'admin' },
+      user: currentUser.value,
     }),
 }))
 
@@ -64,6 +70,8 @@ const shortSolution = '重启服务并清理缓存'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  currentUser.value = { id: 'u1', name: '测试用户', role: 'admin' }
+  seedProjects.length = 0
   seedLogs.length = 0
   seedLogs.push(
     makeOpLog({ id: 'log-long', problem: longText, solution: longSolution }),
@@ -165,5 +173,39 @@ describe('OpLogsPanel 问题列展开/收起（组件级）', () => {
     expect(solutionTd.textContent).toBe('-')
     expect(solutionTd.className).not.toContain('cursor-pointer')
     expect(solutionTd.getAttribute('title')).toBeNull()
+  })
+})
+
+describe('台账编辑权限弹窗（前端闸门与后端 assertOpLogRegisterAccess 同口径）', () => {
+  const basProject = {
+    id: 'p1', name: '预实BAS系统运维', status: 'active', ownerId: 'owner-x',
+    members: [{ userId: 'u1', role: 'editor' }],
+  }
+
+  function seedOne(id: string) {
+    seedProjects.push(basProject)
+    seedLogs.length = 0
+    seedLogs.push(makeOpLog({ id, projectId: 'p1' }))
+  }
+
+  it('系统角色 member 的项目成员可编辑（不再被整体拦成只读）', async () => {
+    currentUser.value = { id: 'u1', name: '章哲', role: 'member' }
+    seedOne('log-m')
+    render(<OpLogsPanel />)
+    const user = userEvent.setup()
+    await user.click((await screen.findAllByTitle('编辑'))[0])
+    // 可编辑弹窗：标题为「编辑台账记录」而非只读视图「台账详情」
+    expect(await screen.findByText('编辑台账记录')).toBeTruthy()
+    expect(screen.queryByText('台账详情')).toBeNull()
+  })
+
+  it('guest 打开详情为只读视图（与后端访客无写入资格一致）', async () => {
+    currentUser.value = { id: 'u1', name: '访客', role: 'guest' }
+    seedOne('log-g')
+    render(<OpLogsPanel />)
+    const user = userEvent.setup()
+    await user.click((await screen.findAllByTitle('编辑'))[0])
+    expect(await screen.findByText('台账详情')).toBeTruthy()
+    expect(screen.queryByText('编辑台账记录')).toBeNull()
   })
 })

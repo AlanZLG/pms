@@ -802,11 +802,9 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
     setDialogOpen(true)
   }
 
-  // 无台账编辑权限的角色（admin/owner 除外）只能只读查看
-  const canEditOpLog =
-    currentUser?.role === 'admin' ||
-    currentUser?.role === 'owner' ||
-    !!currentUser?.customRole?.permissions?.some((p) => p.key === 'oplog.edit')
+  // 台账编辑资格（与后端 assertOpLogRegisterAccess 同口径）：guest 无资格永远只读；
+  // 其余角色（owner/member/finance 等）交由下方 readonly 处的 projectWritable 按项目归属（负责人/成员）判定，admin 全权
+  const canEditOpLog = !!currentUser && currentUser.role !== 'guest'
 
   // 台账写入权限（v1.9.3，与后端守卫同口径）：登记/编辑须为项目负责人或项目成员；删除仅项目负责人；admin 全权
   const projectWritable = useCallback((pid: string | null | undefined) => {
