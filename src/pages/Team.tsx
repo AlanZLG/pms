@@ -315,7 +315,7 @@ export default function Team() {
                       <span className="text-muted">单价</span>
                       <div className="font-medium text-text-primary">
                         {/* 未配置个人/类别价时展示角色默认价（与后端 project-cost 口径一致：负责人 200/成员 150/外包 125） */}
-                        ¥{(u.hourlyRate || getCategoryRate(u.categoryId) || (u.isOutsourced ? 125 : 150))}/小时
+                        ¥{(u.hourlyRate || getCategoryRate(u.categoryId) || (u.isOutsourced ? 125 : 150)).toFixed(2)}/小时
                         {!u.hourlyRate && !getCategoryRate(u.categoryId) && (
                           <span className="ml-1 text-[10px] font-normal text-muted">默认价（负责人项目内 ¥200）</span>
                         )}
@@ -367,7 +367,7 @@ export default function Team() {
                         <span className="font-medium text-text-primary">{cat.name}</span>
                         {cat.isOutsourced && <span className="text-xs px-2 py-0.5 bg-orange-500/20 text-orange-400 rounded">外包</span>}
                       </div>
-                      <div className="text-sm text-muted mt-1">¥{cat.hourlyRate}/小时</div>
+                      <div className="text-sm text-muted mt-1">¥{cat.hourlyRate.toFixed(2)}/小时</div>
                       {cat.description && <div className="text-xs text-muted mt-1">{cat.description}</div>}
                     </div>
                     <div className="flex gap-2">
@@ -549,7 +549,7 @@ export default function Team() {
                 <select value={userCostForm.categoryId || ''} onChange={(e) => setUserCostForm({ ...userCostForm, categoryId: e.target.value || null })} className="w-full rounded-lg border border-bg-border bg-bg-soft px-3 py-2 text-sm text-text-primary outline-none focus:border-brand">
                   <option value="">不设置类别</option>
                   {categories.data?.categories.map((cat) => (
-                    <option key={cat.id} value={cat.id}>{cat.name} (¥{cat.hourlyRate}/小时)</option>
+                    <option key={cat.id} value={cat.id}>{cat.name} (¥{cat.hourlyRate.toFixed(2)}/小时)</option>
                   ))}
                 </select>
               </div>

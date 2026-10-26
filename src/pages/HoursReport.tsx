@@ -812,7 +812,7 @@ export default function HoursReport() {
                             </span>
                           </td>
                           <td className="py-2 px-3 text-right font-mono text-text-secondary">
-                            {member.hourlyRate || '-'}
+                            {member.hourlyRate ? member.hourlyRate.toFixed(2) : '-'}
                             {RATE_SOURCE_BADGE[member.rateSource || ''] && (
                               <span title={`单价来源：${RATE_SOURCE_BADGE[member.rateSource || '']}`} className="ml-1 text-[10px] text-muted align-middle">
                                 {RATE_SOURCE_BADGE[member.rateSource || '']}
