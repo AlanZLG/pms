@@ -10,8 +10,8 @@ import { cn } from '@/lib/utils'
 
 export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' }) {
   const [m, setM] = useState<'login' | 'register'>(mode)
-  const [email, setEmail] = useState('leigang@creat-value.com')
-  const [password, setPassword] = useState('12345')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const login = useAppStore((s) => s.login)
@@ -74,7 +74,7 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
         </div>
 
         <div className="relative z-10 font-mono text-xs text-muted">
-          v1.0 · 演示账号 leigang@creat-value.com / 12345
+          Fortune PM
         </div>
       </div>
 
