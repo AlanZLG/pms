@@ -30,6 +30,8 @@ import feishuRoutes from './routes/feishu.ts'
 import backupRoutes from './routes/backup.ts'
 import { router as opLogRoutes } from './routes/opLogs.ts'
 import { router as auditRoutes } from './routes/audit.ts'
+import { router as testDocRoutes } from './routes/testDocs.ts'
+import approvalsRoutes from './routes/approvals.ts'
 import { auditMiddleware } from './repository/audit.ts'
 
 const app: express.Application = express()
@@ -81,7 +83,9 @@ app.use('/api/export', exportRoutes)
 app.use('/api/feishu', feishuRoutes)
 app.use('/api', backupRoutes)
 app.use('/api', opLogRoutes)
+app.use('/api', testDocRoutes)
 app.use('/api/audit', auditRoutes)
+app.use('/api/approvals', approvalsRoutes)
 
 /**
  * 统一错误处理

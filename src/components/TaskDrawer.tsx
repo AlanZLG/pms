@@ -18,15 +18,24 @@ import { fromNow, dueLabel } from '@/lib/date'
 import { cn, sortUsers } from '@/lib/utils'
 import { inlineDiff, parseChangeDetail } from '@/lib/diff'
 import TaskToOpLogDialog from '@/components/TaskToOpLogDialog'
-import type { Task, Comment, Subtask, User, Attachment, TaskHistory, TaskHours } from '../../shared/types'
+import type { Task, Comment, Subtask, User, Attachment, TaskHistory, TaskHours, TaskOpLogSummary } from '../../shared/types'
+
+// 台账状态徽章配色（与 OpLogsPanel statusStyle 同口径，取任务抽屉常用子集）
+const OPLOG_STATUS_CLS: Record<string, string> = {
+  待处理: 'bg-danger/15 text-danger',
+  处理中: 'bg-warn/15 text-warn',
+  已完成: 'bg-ok/15 text-ok',
+}
 
 interface Props {
   taskId: string | null
   onClose: () => void
   onChanged: () => void
+  /** 点击关联台账行「查看」时回调（项目页切到台账区并高亮该条） */
+  onOpenOpLog?: (logId: string) => void
 }
 
-export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
+export default function TaskDrawer({ taskId, onClose, onChanged, onOpenOpLog }: Props) {
   const [task, setTask] = useState<Task | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
   const [subtasks, setSubtasks] = useState<Subtask[]>([])
@@ -47,6 +56,8 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
   const [hoursBusy, setHoursBusy] = useState(false)
   // 转运维台账
   const [showOpLogDialog, setShowOpLogDialog] = useState(false)
+  // 关联台账聚合（工时入账来源 + 月度计划对照）
+  const [opLogsSummary, setOpLogsSummary] = useState<TaskOpLogSummary | null>(null)
   // 工时区定位高亮（顶部「记工时」按钮触发）
   const hoursSectionRef = useRef<HTMLDivElement>(null)
   const hoursActualRef = useRef<HTMLInputElement>(null)
@@ -143,7 +154,17 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
       .listTaskHours(taskId)
       .then((r) => setHours(r.hours || []))
       .catch(() => setHours([]))
+    api
+      .getTaskOpLogs(taskId)
+      .then(setOpLogsSummary)
+      .catch(() => setOpLogsSummary(null))
   }, [taskId])
+
+  /** 重新拉取关联台账聚合（转台账新增后刷新） */
+  function reloadOpLogs() {
+    if (!taskId) return
+    api.getTaskOpLogs(taskId).then(setOpLogsSummary).catch(() => {})
+  }
 
   /** 重新拉取任务信息（同步进度等字段） */
   async function refreshTask() {
@@ -739,6 +760,72 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
                 </div>
               </div>
 
+              {/* 关联台账（工时入账来源 + 月度计划对照） */}
+              <div className="mt-6">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="font-display text-base text-text-primary">关联台账 ({opLogsSummary?.logs.length ?? 0})</h3>
+                  {opLogsSummary && opLogsSummary.logs.length > 0 && (
+                    <span className="text-xs text-muted">
+                      入账合计 <span className="font-mono text-text-secondary">{opLogsSummary.totalHours.toFixed(1)}h</span>
+                    </span>
+                  )}
+                </div>
+                {opLogsSummary && opLogsSummary.plannedHours != null && opLogsSummary.plannedHours > 0 && (
+                  <div className="mb-3 rounded-xl bg-bg-panel/50 px-3 py-2.5">
+                    <div className="flex items-center gap-2 text-xs text-muted">
+                      <span>计划 {opLogsSummary.plannedHours.toFixed(1)}h</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-bg-border/50">
+                        <div
+                          className={cn('h-full rounded-full transition-all', opLogsSummary.totalHours > opLogsSummary.plannedHours! ? 'bg-warn' : 'bg-ok')}
+                          style={{ width: `${Math.min(100, (opLogsSummary.totalHours / opLogsSummary.plannedHours) * 100)}%` }}
+                        />
+                      </div>
+                      <span className="font-mono text-text-secondary">
+                        {Math.round((opLogsSummary.totalHours / opLogsSummary.plannedHours) * 100)}%
+                      </span>
+                    </div>
+                    {opLogsSummary.monthly.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {opLogsSummary.monthly.map((m) => (
+                          <span key={m.month} className="rounded-full bg-bg-soft px-2 py-0.5 font-mono text-xs text-muted" title={`${m.month} 台账入账工时`}>
+                            {m.month} · {m.hours.toFixed(1)}h
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <ul className="space-y-1.5">
+                  {(opLogsSummary?.logs ?? []).map((log) => (
+                    <li key={log.id} className="group flex items-center gap-2 rounded-lg bg-bg-panel/50 px-3 py-2 text-sm">
+                      <FileSpreadsheet className="h-3.5 w-3.5 shrink-0 text-muted" />
+                      <span className="font-mono text-xs text-text-secondary">{log.logDate}</span>
+                      <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs', OPLOG_STATUS_CLS[log.status] || 'bg-bg-border/40 text-muted')}>
+                        {log.status}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs text-text-secondary" title={log.problem}>
+                        {log.system ? `${log.system} · ` : ''}{log.problem}
+                      </span>
+                      <span className="shrink-0 font-mono text-xs text-text-secondary">{(log.hours || 0).toFixed(1)}h</span>
+                      {onOpenOpLog && (
+                        <button
+                          onClick={() => onOpenOpLog(log.id)}
+                          className="shrink-0 text-muted opacity-0 transition hover:text-brand group-hover:opacity-100"
+                          title="打开运维台账"
+                        >
+                          <ArrowRight className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                  {(!opLogsSummary || opLogsSummary.logs.length === 0) && (
+                    <li className="rounded-xl border border-dashed border-bg-border px-3 py-4 text-center text-xs text-muted">
+                      还没有关联台账：在运维台账填报时选择本任务，或用上方「转台账」生成
+                    </li>
+                  )}
+                </ul>
+              </div>
+
               {/* 操作历史 */}
               <div className="mt-6">
                 <button
@@ -916,6 +1003,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged }: Props) {
             onCreated={() => {
               refreshComments()
               onChanged()
+              reloadOpLogs()
             }}
           />
         )}

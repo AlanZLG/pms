@@ -98,7 +98,7 @@ async function downloadSheet(url: string, token: string): Promise<{ status: numb
 }
 
 // 导出默认表头（mergeFixedExportOrder([])：完整默认序，含「详细描述」与「登记日期」）
-const DEFAULT_EXPORT_HEADERS = ['序号', '日期', '分类', '状态', '系统', '部门', '提出人', '记录人', '问题', '详细描述', '原因', '解决方案', '完成日', '工时', '登记日期']
+const DEFAULT_EXPORT_HEADERS = ['序号', '日期', '分类', '状态', '系统', '部门', '提出人', '记录人', '问题', '详细描述', '原因', '解决方案', '完成日', '关联任务', '工时', '登记日期']
 
 // 导入文件数据行（行号 = 表头行 1 之后的物理行号）
 const ROW_A: (string | number | null)[] = [1, '故障处理', '已完成', '张三', 'OA系统', '技术部', '2026-10-10', '李四', '登录页面报错', '2026-10-11', 2, '用户反馈无法登录，报500错误', '缓存服务异常', '重启缓存服务并清理过期key']
@@ -188,10 +188,10 @@ describe('台账导入 ↔ 导出（端到端 round-trip）', () => {
     // 导入文件指定的序号原样落库（1/2/5；文件内重复行未入库）
     expect(rows.map((r) => r[0]).sort()).toEqual(['1', '2', '5'])
     const a = rows.find((r) => r[8] === '登录页面报错')!
-    expect(a).toEqual(['1', '2026-10-10', '故障处理', '已完成', 'OA系统', '技术部', '张三', '李四', '登录页面报错', '用户反馈无法登录，报500错误', '缓存服务异常', '重启缓存服务并清理过期key', '2026-10-11', '2', expect.any(String)])
+    expect(a).toEqual(['1', '2026-10-10', '故障处理', '已完成', 'OA系统', '技术部', '张三', '李四', '登录页面报错', '用户反馈无法登录，报500错误', '缓存服务异常', '重启缓存服务并清理过期key', '2026-10-11', '', '2', expect.any(String)])
     const b = rows.find((r) => r[8] === '巡检发现慢查询')!
     expect(b[1]).toBe('2026-10-12')
-    expect(b[13]).toBe('1')
+    expect(b[14]).toBe('1')
     const e = rows.find((r) => r[8] === '磁盘告警未填经验')!
     expect(e[9]).toBe('') // 详细描述为空原样导出
   })
@@ -211,11 +211,12 @@ describe('台账导入 ↔ 导出（端到端 round-trip）', () => {
     expect(after.rows).toHaveLength(3)
   })
 
-  it('模板下载：表头为 14 个固定列 + 自定义列示例，含示例行', async () => {
+  it('模板下载：表头为 15 个固定列（含关联任务）+ 自定义列示例，含示例行', async () => {
     const { status, headers, rows } = await downloadSheet('/op-logs/template.xlsx', adminToken)
     expect(status).toBe(200)
-    expect(headers.slice(0, 14)).toEqual(IMPORT_HEADERS)
-    expect(headers[14]).toBe('自定义列示例')
+    // 「关联任务」按固定列默认位插在「完成日」之后
+    expect(headers.slice(0, 15)).toEqual([...IMPORT_HEADERS.slice(0, 10), '关联任务', ...IMPORT_HEADERS.slice(10)])
+    expect(headers[15]).toBe('自定义列示例')
     expect(rows[0]?.[8]).toBe('登录页面报错')
   })
 

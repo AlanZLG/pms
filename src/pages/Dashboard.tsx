@@ -20,13 +20,13 @@ import {
 } from 'recharts'
 import { useSwr } from '@/lib/cache'
 import { api } from '@/lib/api'
-import { Card, Skeleton as UiSkeleton, EmptyState, PriorityBadge, StatusBadge } from '@/components/ui'
+import { Card, Button, Skeleton as UiSkeleton, EmptyState, PriorityBadge, StatusBadge } from '@/components/ui'
 import { StatSkeleton, CardSkeleton, Skeleton } from '@/components/Skeleton'
 import { ContextMenu, SendMessageModal, MessagesTab, MessageMenuIcon, type ContextMenuItem } from '@/components/messages'
 import { useAppStore } from '@/stores/app'
 import { dueLabel, fmtDate } from '@/lib/date'
 import { cn } from '@/lib/utils'
-import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject, ProjectHealth, MessageThread, User } from '../../shared/types'
+import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject, ProjectHealth, MessageThread, User, ApprovalItem } from '../../shared/types'
 import { STATUS_COLORS_HEX, PROJECT_STATUS_META } from '@/lib/constants'
 import { useMemo, useState } from 'react'
 
@@ -73,6 +73,7 @@ function reminderContent(kind: 'task' | 'project', name: string, overdueDays: nu
 
 export default function Dashboard() {
   const user = useAppStore((s) => s.user)
+  const notify = useAppStore((s) => s.notify)
   const userId = user?.id || ''
   const overview = useSwr<StatsOverview>('overview', () => api.overview())
   const burndown = useSwr<BurndownData>('burndown:all', () => api.burndown(''))
@@ -117,7 +118,46 @@ const tasks = useSwr<{ mine: Task[]; overdue: OverdueTask[] }>(userId ? `tasks:u
     .map((t) => ({ ...t, projectName: nameById.get(t.projectId) || '' }))
   return { mine, overdue }
 })
-const [todoTab, setTodoTab] = useState<'mine' | 'overdue' | 'budget' | 'messages'>('mine')
+const [todoTab, setTodoTab] = useState<'mine' | 'overdue' | 'budget' | 'approvals' | 'messages'>('mine')
+// 统一审批：待审批聚合（预算审批 + 项目删除申请），支持单条/批量通过与驳回
+const approvals = useSwr<{ items: ApprovalItem[] }>(userId ? 'approvals:pending' : null, () => api.listApprovals())
+const approvalItems = useMemo(() => approvals.data?.items ?? [], [approvals.data])
+const [approvalSel, setApprovalSel] = useState<Set<string>>(new Set())
+const approvalKey = (i: ApprovalItem) => `${i.type}:${i.id}`
+const selectedApprovalItems = approvalItems.filter((i) => approvalSel.has(approvalKey(i)))
+
+function toggleApproval(item: ApprovalItem) {
+  setApprovalSel((prev) => {
+    const next = new Set(prev)
+    const k = approvalKey(item)
+    if (next.has(k)) next.delete(k)
+    else next.add(k)
+    return next
+  })
+}
+
+function toggleAllApprovals() {
+  setApprovalSel((prev) => (prev.size > 0 && prev.size >= approvalItems.length ? new Set<string>() : new Set(approvalItems.map(approvalKey))))
+}
+
+async function handleApproval(targets: ApprovalItem[], action: 'approve' | 'reject') {
+  const deletionCount = targets.filter((i) => i.type === 'deletion').length
+  if (action === 'approve' && deletionCount > 0 && !window.confirm(`将批准 ${targets.length} 项，其中 ${deletionCount} 项删除申请（项目将移入回收站，可在回收站恢复）。确认执行？`)) return
+  try {
+    const r = await api.batchApprovals(targets.map((i) => ({ id: i.id, type: i.type })), action)
+    if (r.failed > 0) {
+      const firstError = r.results.find((x) => !x.ok)?.error || ''
+      notify('error', `成功 ${r.succeeded} 项，失败 ${r.failed} 项（${firstError}）`)
+    } else {
+      notify('success', `已${action === 'approve' ? '通过' : '驳回'} ${r.succeeded} 项审批`)
+    }
+    setApprovalSel(new Set())
+    approvals.revalidate()
+    if (deletionCount > 0) projects.revalidate()
+  } catch {
+    notify('error', '审批操作失败')
+  }
+}
 const myBudgets = useSwr<BudgetWithProject[]>(userId ? 'budgets:mine' : null, async () => {
   const { budgets } = await api.myBudgets()
   return budgets
@@ -457,6 +497,18 @@ const [msgTarget, setMsgTarget] = useState<{
             >
               我的预算 {myBudgets.data ? `(${myBudgets.data.length})` : ''}
             </button>
+            {approvalItems.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setTodoTab('approvals')}
+                className={cn(
+                  'rounded-md px-2.5 py-1 transition',
+                  todoTab === 'approvals' ? 'bg-bg-card text-text-primary shadow-sm' : 'text-muted hover:text-text-secondary',
+                )}
+              >
+                审批 <span className="font-medium text-warn">({approvalItems.length})</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setTodoTab('messages')}
@@ -474,7 +526,7 @@ const [msgTarget, setMsgTarget] = useState<{
             </button>
           </div>
         </div>
-        {(todoTab === 'budget' ? myBudgets.loading : todoTab === 'messages' ? messages.loading : tasks.loading) ? (
+        {(todoTab === 'budget' ? myBudgets.loading : todoTab === 'approvals' ? approvals.loading : todoTab === 'messages' ? messages.loading : tasks.loading) ? (
           <div className="space-y-2">
             {Array.from({ length: 4 }).map((_, i) => (
               <UiSkeleton key={i} className="h-14" />
@@ -482,6 +534,70 @@ const [msgTarget, setMsgTarget] = useState<{
           </div>
         ) : (
           (() => {
+            if (todoTab === 'approvals') {
+              if (approvalItems.length === 0) {
+                return <EmptyState title="暂无待审批内容" hint="预算审批与项目删除申请会出现在这里" />
+              }
+              const allSelected = approvalSel.size > 0 && approvalSel.size >= approvalItems.length
+              return (
+                <div>
+                  <div className="flex items-center gap-3 py-2 text-xs text-muted">
+                    <label className="flex cursor-pointer select-none items-center gap-1.5">
+                      <input type="checkbox" className="accent-brand" checked={allSelected} onChange={toggleAllApprovals} />
+                      全选
+                    </label>
+                    {approvalSel.size > 0 && (
+                      <>
+                        <span>已选 {approvalSel.size} 项</span>
+                        <div className="ml-auto flex items-center gap-1.5">
+                          <Button variant="ghost" size="sm" onClick={() => handleApproval(selectedApprovalItems, 'reject')}>批量驳回</Button>
+                          <Button size="sm" onClick={() => handleApproval(selectedApprovalItems, 'approve')}>批量通过</Button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  <ul className="divide-y divide-bg-border">
+                    {approvalItems.map((item) => {
+                      const k = approvalKey(item)
+                      return (
+                        <li key={k} className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40">
+                          <input type="checkbox" className="accent-brand" checked={approvalSel.has(k)} onChange={() => toggleApproval(item)} />
+                          <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-xs', item.type === 'budget' ? 'bg-warn/15 text-warn' : 'bg-danger/15 text-danger')}>
+                            {item.type === 'budget' ? '预算' : '删除申请'}
+                          </span>
+                          <span className="max-w-28 shrink-0 truncate rounded bg-bg-soft px-1.5 py-0.5 text-xs text-muted">
+                            {item.projectName}
+                          </span>
+                          <span className="flex-1 truncate text-sm text-text-primary">{item.title}</span>
+                          {item.type === 'budget' && item.amount != null && (
+                            <span className="shrink-0 font-mono text-xs text-text-secondary">¥{item.amount.toLocaleString()}</span>
+                          )}
+                          <span className="hidden shrink-0 text-xs text-muted xl:inline">
+                            {item.requesterName} · {fmtDate(item.requestedAt, 'yyyy-MM-dd')}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleApproval([item], 'approve')}
+                              className="rounded-md px-2 py-1 text-xs text-ok transition hover:bg-ok/10"
+                            >
+                              通过
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApproval([item], 'reject')}
+                              className="rounded-md px-2 py-1 text-xs text-danger transition hover:bg-danger/10"
+                            >
+                              驳回
+                            </button>
+                          </span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )
+            }
             if (todoTab === 'messages') {
               return (
                 <MessagesTab

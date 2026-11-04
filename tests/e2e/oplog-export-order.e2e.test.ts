@@ -64,7 +64,7 @@ async function exportHeaders(url: string, token: string): Promise<{ status: numb
 const LABELS: Record<string, string> = {
   logDate: '日期', category: '分类', status: '状态', system: '系统', department: '部门',
   proposer: '提出人', recorder: '记录人', problem: '问题', detail: '详细描述', cause: '原因',
-  solution: '解决方案', completionDate: '完成日', hours: '工时', createdAt: '登记日期',
+  solution: '解决方案', completionDate: '完成日', task: '关联任务', hours: '工时', createdAt: '登记日期',
 }
 const toLabels = (keys: readonly string[]) => keys.map((k) => LABELS[k] ?? k)
 const DEFAULTS = OP_LOG_DEFAULT_COLUMN_ORDER as readonly string[]
@@ -148,9 +148,9 @@ describe('台账导出列序 = 界面列设置（端到端）', () => {
     expect(save.status).toBe(200)
     const { status, headers } = await exportHeaders(`/op-logs/export.xlsx?projectId=${projectId}`, adminToken)
     expect(status).toBe(200)
-    // 序号永远第 1 列，其余固定列 = 用户设置序
+    // 序号永远第 1 列，其余固定列 = 用户设置序；旧序缺失的「关联任务」按默认位补在 recorder 之后
     expect(headers[0]).toBe('序号')
-    expect(headers.slice(1)).toEqual(toLabels(custom))
+    expect(headers.slice(1)).toEqual([...toLabels(custom.slice(0, 13)), '关联任务', ...toLabels(custom.slice(13))])
   })
 
   it('路径 B：导出请求显式携带 colOrder → 请求序优先于账号持久化序', async () => {
@@ -180,7 +180,7 @@ describe('台账导出列序 = 界面列设置（端到端）', () => {
     // detail 补在 problem（请求序中最后一个默认位次在 detail 之前的列）之后，createdAt（默认末位）补到最后
     expect(headers.slice(1)).toEqual(toLabels([
       'logDate', 'category', 'status', 'system', 'department', 'proposer', 'recorder',
-      'hours', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'createdAt',
+      'hours', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'task', 'createdAt',
     ]))
   })
 })
@@ -204,7 +204,7 @@ describe('统一交错列序（端到端）：自定义列/项目列按界面位
     expect(status).toBe(200)
     expect(headers).toEqual([
       '序号', '日期', '分类', '状态', '项目', '系统', '部门', '提出人', '记录人',
-      '问题', '详细描述', '原因', '解决方案', '完成日', '工时', '登记日期',
+      '问题', '详细描述', '原因', '解决方案', '完成日', '关联任务', '工时', '登记日期',
     ])
   })
 
@@ -238,10 +238,10 @@ describe('统一交错列序（端到端）：自定义列/项目列按界面位
     const url = `/op-logs/export.xlsx?projectId=${projectId2}&colOrder=${encodeURIComponent(JSON.stringify(colOrder))}`
     const { status, headers } = await exportHeaders(url, adminToken)
     expect(status).toBe(200)
-    // 精确表头：客户名称在「完成日」与「工时」之间（修复前会被强制堆到最末）
+    // 精确表头：客户名称保持在「完成日」与「工时」之间（修复前会被强制堆到最末）；「关联任务」按默认位补在完成日之后
     expect(headers).toEqual([
       '序号', '日期', '分类', '状态', '系统', '部门', '提出人', '记录人',
-      '问题', '详细描述', '原因', '解决方案', '完成日', '客户名称', '工时', '登记日期',
+      '问题', '详细描述', '原因', '解决方案', '完成日', '关联任务', '客户名称', '工时', '登记日期',
     ])
     // 值对齐：「某某公司」必须落在「客户名称」表头所在列（表头 index 13 → Excel 第 14 列）
     const res = await fetch(`${BASE}${url}`, { headers: { Authorization: `Bearer ${adminToken}` } })

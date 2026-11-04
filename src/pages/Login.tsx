@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Sparkles, Mail, Lock, User as UserIcon, ArrowRight, CheckCircle2 } from 'lucide-react'
+import { Mail, Lock, User as UserIcon, ArrowRight, CheckCircle2 } from 'lucide-react'
 import { useAppStore } from '@/stores/app'
 import { Button, Input } from '@/components/ui'
+import { Logo } from '@/components/Logo'
 import { getErrorMessage } from '@/lib/errors'
 import { cn } from '@/lib/utils'
 
@@ -43,9 +44,7 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
         <div className="absolute -left-24 -top-24 h-96 w-96 rounded-full bg-brand/30 blur-3xl" />
         <div className="absolute bottom-0 right-0 h-80 w-80 rounded-full bg-cyan-500/20 blur-3xl" />
         <div className="relative z-10 flex items-center gap-3">
-          <div className="grid h-12 w-12 place-items-center rounded-2xl bg-brand-grad text-text-primary shadow-glow">
-            <Sparkles className="h-6 w-6" />
-          </div>
+          <Logo size={48} />
           <div>
             <p className="font-display text-2xl text-text-primary">Fortune</p>
             <p className="text-sm text-muted">让每一次推进,都被看见</p>
@@ -82,9 +81,7 @@ export default function Login({ mode = 'login' }: { mode?: 'login' | 'register' 
       <div className="flex items-center justify-center p-6 md:p-10">
         <div className="glass w-full max-w-md rounded-3xl p-8 shadow-glow animate-pop-in">
           <div className="mb-6 flex items-center gap-2 lg:hidden">
-            <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-grad text-text-primary">
-              <Sparkles className="h-5 w-5" />
-            </div>
+            <Logo size={40} />
             <p className="font-display text-xl text-text-primary">Fortune 项目管理</p>
           </div>
 

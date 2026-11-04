@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { RotateCcw, Trash, Search, AlertTriangle, Folder } from 'lucide-react'
+import { RotateCcw, Trash, Search, AlertTriangle, Folder, FileText } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { Card, Button, EmptyState, StatusBadge, PriorityBadge } from '@/components/ui'
@@ -7,15 +7,16 @@ import { ProjectStatusBadge } from '@/components/ProjectDialog'
 import { useAppStore } from '@/stores/app'
 import { useNavigate } from 'react-router-dom'
 import { dueLabel } from '@/lib/date'
-import type { Task, Project } from '../../shared/types'
+import type { Task, Project, TestDocTrash } from '../../shared/types'
 
 export default function TrashPage() {
   const notify = useAppStore((s) => s.notify)
   const nav = useNavigate()
   const [search, setSearch] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [confirmDocDelete, setConfirmDocDelete] = useState<string | null>(null)
 
-  const trash = useAsync<{ tasks: Task[]; projects: Project[] }>(() => api.listTrash(), [])
+  const trash = useAsync<{ tasks: Task[]; projects: Project[]; testDocs: TestDocTrash[] }>(() => api.listTrash(), [])
   // 待审批删除申请：无权限（403）时接口报错、区块自动隐藏
   const pending = useAsync<{ projects: Project[] }>(() => api.listPendingDeletions(), [])
 
@@ -72,21 +73,47 @@ export default function TrashPage() {
     }
   }
 
+  // 测试文档：恢复（仅项目负责人/管理员，服务端强制校验）
+  async function handleRestoreTestDoc(doc: TestDocTrash) {
+    try {
+      await api.restoreTestDoc(doc.id)
+      notify('success', `测试文档「${doc.title}」已恢复`)
+      trash.reload()
+    } catch {
+      notify('error', '恢复失败（仅项目负责人可恢复测试文档）')
+    }
+  }
+
+  async function handlePhysicalDeleteTestDoc(doc: TestDocTrash) {
+    try {
+      await api.physicalDeleteTestDoc(doc.id)
+      notify('success', `测试文档「${doc.title}」已彻底删除`)
+      setConfirmDocDelete(null)
+      trash.reload()
+    } catch {
+      notify('error', '删除失败')
+    }
+  }
+
   const tasks = trash.data?.tasks || []
   const projects = trash.data?.projects || []
+  const testDocs = trash.data?.testDocs || []
   const filtered = search
     ? tasks.filter((t) => t.title.toLowerCase().includes(search.toLowerCase()))
     : tasks
   const filteredProjects = search
     ? projects.filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
     : projects
+  const filteredDocs = search
+    ? testDocs.filter((d) => d.title.toLowerCase().includes(search.toLowerCase()))
+    : testDocs
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl text-text-primary">回收站</h1>
-          <p className="mt-1 text-sm text-muted">已删除的任务保留在此处，恢复后可继续使用</p>
+          <p className="mt-1 text-sm text-muted">已删除的任务与测试文档保留在此处，恢复后可继续使用</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="relative">
@@ -137,7 +164,7 @@ export default function TrashPage() {
 
       {trash.loading ? (
         <Card className="p-12 text-center text-muted">加载中…</Card>
-      ) : filtered.length === 0 && filteredProjects.length === 0 ? (
+      ) : filtered.length === 0 && filteredProjects.length === 0 && filteredDocs.length === 0 ? (
         <EmptyState title="回收站为空" hint="这里没有已删除的内容" />
       ) : (
         <div className="space-y-6">
@@ -175,6 +202,47 @@ export default function TrashPage() {
                       title="恢复项目（含其下任务）"
                     >
                       <RotateCcw className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </Card>
+          )}
+
+          {filteredDocs.length > 0 && (
+            <Card className="divide-y divide-bg-border">
+              <div className="flex items-center gap-4 px-4 py-3 text-xs font-medium text-muted">
+                <div className="flex-1">测试文档</div>
+                <div className="w-28">所属项目</div>
+                <div className="w-16 text-center">版本</div>
+                <div className="w-20 text-right">删除时间</div>
+                <div className="w-32 text-right">操作</div>
+              </div>
+              {filteredDocs.map((doc) => (
+                <div key={doc.id} className="flex items-center gap-4 px-4 py-3 transition-colors hover:bg-bg-soft/50">
+                  <div className="flex flex-1 min-w-0 items-center gap-2">
+                    <FileText className="h-4 w-4 shrink-0 text-muted" />
+                    <span className="truncate text-sm text-text-primary">{doc.title}</span>
+                  </div>
+                  <div className="w-28 truncate text-xs text-muted">{doc.projectName || '-'}</div>
+                  <div className="w-16 text-center text-xs text-muted">v{doc.version}</div>
+                  <div className="w-20 text-right text-xs text-muted">
+                    {doc.deletedAt ? `${new Date(doc.deletedAt).getMonth() + 1}/${new Date(doc.deletedAt).getDate()}` : '-'}
+                  </div>
+                  <div className="flex w-32 justify-end gap-1">
+                    <button
+                      onClick={() => handleRestoreTestDoc(doc)}
+                      className="rounded-md p-2 text-ok hover:bg-ok/10"
+                      title="恢复测试文档（仅项目负责人/管理员）"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => setConfirmDocDelete(doc.id)}
+                      className="rounded-md p-2 text-danger hover:bg-danger/10"
+                      title="彻底删除"
+                    >
+                      <Trash className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -227,6 +295,37 @@ export default function TrashPage() {
                 onClick={() => {
                   const task = tasks.find((t) => t.id === confirmDelete)
                   if (task) handlePhysicalDelete(task)
+                }}
+                className="bg-danger hover:bg-danger/90"
+              >
+                彻底删除
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {confirmDocDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <Card className="max-h-[85vh] w-full max-w-md overflow-y-auto p-6">
+            <div className="flex items-start gap-4">
+              <div className="grid h-12 w-12 place-items-center rounded-full bg-danger/20">
+                <AlertTriangle className="h-6 w-6 text-danger" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold text-text-primary">彻底删除测试文档</h3>
+                <p className="mt-1 text-sm text-muted">
+                  此操作不可撤销，文档「{testDocs.find((d) => d.id === confirmDocDelete)?.title}」及其全部修改履历将被永久删除。确定要继续吗？
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex gap-3">
+              <Button variant="ghost" onClick={() => setConfirmDocDelete(null)}>取消</Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  const doc = testDocs.find((d) => d.id === confirmDocDelete)
+                  if (doc) handlePhysicalDeleteTestDoc(doc)
                 }}
                 className="bg-danger hover:bg-danger/90"
               >

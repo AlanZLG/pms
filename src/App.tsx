@@ -1,6 +1,6 @@
 // 应用路由
 
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
+import { RouterProvider, createBrowserRouter, createRoutesFromElements, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect, lazy, Suspense } from 'react'
 import { Sparkles } from 'lucide-react'
 import { useAppStore } from '@/stores/app'
@@ -39,7 +39,19 @@ function PageFallback() {
   )
 }
 
-export default function App() {
+// data router：ModalNavGuard 的 useBlocker 需要（BrowserRouter 下不可用）
+const router = createBrowserRouter(
+  createRoutesFromElements(
+    <>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Login mode="register" />} />
+      <Route path="/*" element={<RootGate />} />
+    </>,
+  ),
+)
+
+/** 初始化门 + 登录门：原 App 的加载门与受保护路由树整体搬入 */
+function RootGate() {
   const init = useAppStore((s) => s.init)
   const initialized = useAppStore((s) => s.initialized)
   const user = useAppStore((s) => s.user)
@@ -58,107 +70,104 @@ export default function App() {
   }
 
   return (
+    <>
+      {user ? (
+        <ProtectedShell>
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route
+              path="/projects"
+              element={
+                <ErrorBoundary>
+                  <Projects />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/projects/:projectId"
+              element={
+                <ErrorBoundary>
+                  <ProjectDetail />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/stats"
+              element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageFallback />}>
+                    <Stats />
+                  </Suspense>
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/hours"
+              element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageFallback />}>
+                    <HoursReport />
+                  </Suspense>
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/op-logs"
+              element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageFallback />}>
+                    <OpLogs />
+                  </Suspense>
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/team"
+              element={
+                <ErrorBoundary>
+                  <Team />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/roles"
+              element={
+                <ErrorBoundary>
+                  <Roles />
+                </ErrorBoundary>
+              }
+            />
+            <Route
+              path="/audit"
+              element={
+                <ErrorBoundary>
+                  <Suspense fallback={<PageFallback />}>
+                    <AuditLogs />
+                  </Suspense>
+                </ErrorBoundary>
+              }
+            />
+            <Route path="/notifications" element={<Notifications />} />
+            <Route path="/trash" element={<Trash />} />
+            <Route path="/templates" element={<Templates />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ProtectedShell>
+      ) : (
+        <Navigate to="/login" replace />
+      )}
+      <Toaster />
+      {/* 新建账号首次登录强制改密，改完前遮罩整个系统 */}
+      {user?.mustChangePassword && <ForceChangePasswordModal />}
+    </>
+  )
+}
+
+export default function App() {
+  return (
     <ErrorBoundary>
-      <Router>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Login mode="register" />} />
-          <Route
-            path="/*"
-            element={
-              user ? (
-                <ProtectedShell>
-                  <Routes>
-                    <Route path="/" element={<Dashboard />} />
-                    <Route
-                      path="/projects"
-                      element={
-                        <ErrorBoundary>
-                          <Projects />
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/projects/:projectId"
-                      element={
-                        <ErrorBoundary>
-                          <ProjectDetail />
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/stats"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={<PageFallback />}>
-                            <Stats />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/hours"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={<PageFallback />}>
-                            <HoursReport />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/op-logs"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={<PageFallback />}>
-                            <OpLogs />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/team"
-                      element={
-                        <ErrorBoundary>
-                          <Team />
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/roles"
-                      element={
-                        <ErrorBoundary>
-                          <Roles />
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route
-                      path="/audit"
-                      element={
-                        <ErrorBoundary>
-                          <Suspense fallback={<PageFallback />}>
-                            <AuditLogs />
-                          </Suspense>
-                        </ErrorBoundary>
-                      }
-                    />
-                    <Route path="/notifications" element={<Notifications />} />
-                    <Route path="/trash" element={<Trash />} />
-                    <Route path="/templates" element={<Templates />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="*" element={<Navigate to="/" replace />} />
-                  </Routes>
-                </ProtectedShell>
-              ) : (
-                <Navigate to="/login" replace />
-              )
-            }
-          />
-        </Routes>
-        <Toaster />
-        {/* 新建账号首次登录强制改密，改完前遮罩整个系统 */}
-        {user?.mustChangePassword && <ForceChangePasswordModal />}
-      </Router>
+      <RouterProvider router={router} />
     </ErrorBoundary>
   )
 }

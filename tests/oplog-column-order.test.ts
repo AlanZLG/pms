@@ -23,8 +23,8 @@ describe('台账默认列序（shared 单一事实源）', () => {
     expect(DEFAULTS.indexOf('detail')).toBeLessThan(DEFAULTS.indexOf('cause'))
   })
 
-  it('覆盖全部固定列（登记日期也在其中）', () => {
-    for (const k of ['category', 'status', 'proposer', 'system', 'department', 'logDate', 'recorder', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'hours', 'createdAt']) {
+  it('覆盖全部固定列（含 v1.12 新增「关联任务」，登记日期也在其中）', () => {
+    for (const k of ['category', 'status', 'proposer', 'system', 'department', 'logDate', 'recorder', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'task', 'hours', 'createdAt']) {
       expect(DEFAULTS).toContain(k)
     }
   })
@@ -42,9 +42,9 @@ describe('导出端 mergeFixedExportOrder（列设置跟随修复）', () => {
     expect(out.indexOf('detail')).toBeLessThan(out.indexOf('solution'))
   })
 
-  it('用户自定义完整序 → 原样保持（导出与列设置一模一样）', () => {
+  it('用户自定义完整序 → 原样保持（导出与列设置一模一样；旧序缺失的 task 列按默认位补齐）', () => {
     const custom = ['status', 'problem', 'detail', 'cause', 'solution', 'logDate', 'hours', 'completionDate', 'category', 'system', 'department', 'proposer', 'recorder', 'createdAt']
-    expect(mergeFixedExportOrder(custom)).toEqual([...custom])
+    expect(mergeFixedExportOrder(custom)).toEqual(['status', 'problem', 'detail', 'cause', 'solution', 'logDate', 'hours', 'completionDate', 'category', 'system', 'department', 'proposer', 'recorder', 'task', 'createdAt'])
   })
 
   it('未知列被过滤、seq/project 被忽略；缺失列按默认相对位置补齐', () => {
@@ -82,10 +82,10 @@ describe('统一交错列序 mergeExportOrder（自定义列/项目列可与固�
     // 前端同输入（过滤界面专用 project 列）必须与后端完全一致 —— 这是「导出=界面」的核心承诺
     const fe = mergeColumnOrder(stored, ['客户名称']).filter((k) => k !== 'project')
     expect(fe).toEqual(be)
-    // 精确序：extra:客户名称 保持在 recorder 与 problem 之间；hours 保持在用户放置的位置
+    // 精确序：extra:客户名称 保持在 recorder 与 problem 之间；hours 保持在用户放置的位置；task 按默认位补在 completionDate 后
     expect(be).toEqual([
       'logDate', 'category', 'status', 'system', 'department', 'proposer', 'recorder',
-      'extra:客户名称', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'hours', 'createdAt',
+      'extra:客户名称', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'task', 'hours', 'createdAt',
     ])
   })
 
@@ -100,7 +100,7 @@ describe('统一交错列序 mergeExportOrder（自定义列/项目列可与固�
     const out = mergeExportOrder(['logDate', 'project', 'problem'], [], true)
     expect(out).toEqual([
       'logDate', 'category', 'status', 'project', 'system', 'department', 'proposer', 'recorder',
-      'problem', 'detail', 'cause', 'solution', 'completionDate', 'hours', 'createdAt',
+      'problem', 'detail', 'cause', 'solution', 'completionDate', 'task', 'hours', 'createdAt',
     ])
   })
 

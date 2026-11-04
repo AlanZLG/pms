@@ -3,16 +3,18 @@
 import type {
   User, Project, Task, Comment, Subtask, AuthResponse, Notification,
   StatsOverview, BurndownData, WorkloadItem, ProjectHealth, Template, Attachment,
-  TaskHours, ProjectBudget, ProjectExpense, BudgetCategory, BudgetWithProject,
+  TaskHours, ProjectBudget, ProjectExpense, BudgetCategory, BudgetWithProject, TaskOpLogSummary,
   HoursByUserProject, ProjectCostSummary, UserCategory, TaskDependency, TaskHistory,
   SavedFilter, TaskFilter, SearchResult, KanbanColumn, KanbanColumnInput,
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
   CustomRole, PermissionCategory,
+  ApprovalItem, ApprovalType, BatchApprovalResult,
   Message, MessageThread,
   AuditLog, AuditQuery,
   OpLog, OpLogInput, OpLogFilter, OpLogOptions, OpLogStat, OpLogExtraConfig, OpLogCustomField, OpLogCustomFieldType,
   OpLogAiAnalyzeRequest, OpLogAiAnalyzeResponse, OpLogAiAnalysis, OpLogAiCase, OpLogAiStatus,
   AiChatRequest,
+  TestDoc, TestDocVersion, TestDocVersionMeta, TestDocTrash,
 } from '../../shared/types'
 
 const TOKEN_KEY = 'pm_token'
@@ -124,6 +126,13 @@ export const api = {
   deleteProject: (id: string) =>
     request<{ ok?: boolean; pendingApproval?: boolean; message?: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
   listPendingDeletions: () => request<{ projects: Project[] }>('/api/projects/pending-deletions'),
+  // 统一审批：我的待办聚合 + 批量审批（预算审批 / 项目删除申请）
+  listApprovals: () => request<{ items: ApprovalItem[] }>('/api/approvals'),
+  batchApprovals: (items: { id: string; type: ApprovalType }[], action: 'approve' | 'reject', comment?: string) =>
+    request<{ results: BatchApprovalResult[]; succeeded: number; failed: number }>('/api/approvals/batch', {
+      method: 'POST',
+      body: JSON.stringify({ items, action, comment: comment || '' }),
+    }),
   approveProjectDeletion: (id: string) =>
     request<{ ok: boolean }>(`/api/projects/${id}/deletion/approve`, { method: 'POST' }),
   rejectProjectDeletion: (id: string, data?: { comment?: string }) =>
@@ -232,7 +241,66 @@ export const api = {
   physicalDeleteTask: (taskId: string) =>
     request<{ ok: boolean }>(`/api/tasks/${taskId}/physical`, { method: 'DELETE' }),
   listTrash: (projectId?: string) =>
-    request<{ tasks: Task[]; projects: Project[] }>(`/api/trash${projectId ? `?projectId=${projectId}` : ''}`),
+    request<{ tasks: Task[]; projects: Project[]; testDocs: TestDocTrash[] }>(`/api/trash${projectId ? `?projectId=${projectId}` : ''}`),
+  restoreTestDoc: (id: string) =>
+    request<{ ok: boolean }>(`/api/test-docs/${id}/restore`, { method: 'POST' }),
+  physicalDeleteTestDoc: (id: string) =>
+    request<{ ok: boolean }>(`/api/test-docs/${id}/physical`, { method: 'DELETE' }),
+
+  // test docs（测试文档：在线网格编辑 + Excel 导入导出 + 版本履历）
+  listTestDocs: (projectId: string) =>
+    request<{ testDocs: TestDoc[] }>(`/api/projects/${projectId}/test-docs`),
+  createTestDoc: (projectId: string, data: { title: string; columns?: unknown[] }) =>
+    request<{ testDoc: TestDoc }>(`/api/projects/${projectId}/test-docs`, { method: 'POST', body: JSON.stringify(data) }),
+  getTestDoc: (id: string) =>
+    request<{ testDoc: TestDoc }>(`/api/test-docs/${id}`),
+  updateTestDoc: (id: string, data: { title?: string; columns: unknown[]; rows: unknown[]; baseVersion?: number }) =>
+    request<{ testDoc: TestDoc }>(`/api/test-docs/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  listTestDocVersions: (id: string) =>
+    request<{ versions: TestDocVersionMeta[] }>(`/api/test-docs/${id}/versions`),
+  getTestDocVersion: (id: string, version: number) =>
+    request<{ version: TestDocVersion }>(`/api/test-docs/${id}/versions/${version}`),
+  rollbackTestDoc: (id: string, version: number) =>
+    request<{ testDoc: TestDoc }>(`/api/test-docs/${id}/rollback`, { method: 'POST', body: JSON.stringify({ version }) }),
+  deleteTestDoc: (id: string) =>
+    request<{ ok: boolean }>(`/api/test-docs/${id}`, { method: 'DELETE' }),
+  // 从 Excel 导入创建测试文档
+  importTestDoc: async (projectId: string, file: File): Promise<{ testDoc: TestDoc }> => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const token = getToken()
+    const headers: Record<string, string> = {}
+    if (token) headers.Authorization = `Bearer ${token}`
+    const res = await fetch(`/api/projects/${projectId}/test-docs/import`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    })
+    if (!res.ok) {
+      let message = `导入失败(${res.status})`
+      try {
+        const body = await res.json()
+        message = body.error || message
+      } catch {
+        // 响应体解析失败，使用默认错误信息
+      }
+      throw new Error(message)
+    }
+    return res.json()
+  },
+  // 下载测试文档 Excel 版
+  downloadTestDocXlsx: async (id: string, title: string): Promise<void> => {
+    const token = getToken()
+    if (!token) throw new Error('未登录')
+    const res = await fetch(`/api/test-docs/${id}/export.xlsx`, { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`下载失败(${res.status})`)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${title}.xlsx`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  },
   addComment: (taskId: string, content: string) =>
     request<{ comment: Comment }>(`/api/tasks/${taskId}/comments`, {
       method: 'POST',
@@ -323,6 +391,9 @@ export const api = {
   // hours
   listTaskHours: (taskId: string) =>
     request<{ hours: TaskHours[] }>(`/api/tasks/${taskId}/hours`),
+  // 任务关联台账聚合（月度对照）
+  getTaskOpLogs: (taskId: string) =>
+    request<TaskOpLogSummary>(`/api/tasks/${taskId}/op-logs`),
   createTaskHours: (taskId: string, data: { date: string; plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }) =>
     request<{ record: TaskHours; warning?: string | null }>(`/api/tasks/${taskId}/hours`, { method: 'POST', body: JSON.stringify(data) }),
   updateTaskHours: (recordId: string, data: { plannedHours?: number; actualHours?: number; billedHours?: number; description?: string }) =>

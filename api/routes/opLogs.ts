@@ -124,6 +124,7 @@ const FIXED_COLUMNS = [
   { key: 'recorder', label: '记录人' },
   { key: 'problem', label: '问题' },
   { key: 'completionDate', label: '完成日' },
+  { key: 'task', label: '关联任务' },
   { key: 'hours', label: '工时' },
   { key: 'detail', label: '详细描述' },
   { key: 'cause', label: '原因' },
@@ -133,8 +134,21 @@ const FIXED_COLUMNS = [
 // 固定列导出宽度 + 登记日期（非 FIXED_COLUMNS 但参与导出，跟随用户列序）
 const FIXED_COL_WIDTH: Record<string, number> = {
   category: 12, status: 10, proposer: 10, system: 14, department: 12, logDate: 12,
-  recorder: 10, problem: 30, completionDate: 12, hours: 8, detail: 36, cause: 24, solution: 36, createdAt: 12,
+  recorder: 10, problem: 30, completionDate: 12, task: 18, hours: 8, detail: 36, cause: 24, solution: 36, createdAt: 12,
 }
+
+/**
+ * 台账关联任务标题批量回填（列表/导出共用）：
+ * 收集当前结果里的 task_id 一次查库，避免前端再逐项目拉任务清单。
+ */
+function attachTaskTitles<T extends { taskId?: string | null; taskTitle?: string | null }>(logs: T[]): T[] {
+  const ids = [...new Set(logs.map((l) => l.taskId).filter((v): v is string => Boolean(v)))]
+  if (ids.length === 0) return logs
+  const rows = db.prepare(`SELECT id, title FROM tasks WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as Array<{ id: string; title: string }>
+  const titles = new Map(rows.map((r) => [r.id, r.title]))
+  return logs.map((l) => (l.taskId ? { ...l, taskTitle: titles.get(l.taskId) ?? null } : l))
+}
+
 function fixedLabel(k: string): string {
   if (k === 'createdAt') return '登记日期'
   return FIXED_COLUMNS.find((c) => c.key === k)?.label ?? k
@@ -416,7 +430,7 @@ router.get('/op-logs', (req: AuthRequest, res: Response, next: NextFunction) => 
       sortBy: (q.sortBy as string) || undefined,
       sortDir: q.sortDir === 'asc' ? 'asc' : q.sortDir === 'desc' ? 'desc' : undefined,
     })
-    res.json({ logs })
+    res.json({ logs: attachTaskTitles(logs) })
   } catch (e) { next(e) }
 })
 
@@ -924,7 +938,7 @@ router.post('/op-logs/import', upload.single('file'), async (req: AuthRequest, r
 router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     const q = req.query
-    const logs = opLogRepo.find({
+    const logs = attachTaskTitles(opLogRepo.find({
       projectId: (q.projectId as string) || undefined,
       projectIds: scopeToProjectIds(scopeOf(req), (q.projectId as string) || undefined),
       category: (q.category as string) || undefined,
@@ -936,7 +950,7 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
       dateTo: (q.dateTo as string) || undefined,
       sortBy: (q.sortBy as string) || undefined,
       sortDir: q.sortDir === 'asc' ? 'asc' : q.sortDir === 'desc' ? 'desc' : undefined,
-    })
+    }))
 
     // 自定义列导出口径：
     // - 目标项目启用自定义列配置 → 按配置的名称与顺序导出（数据按字段键取值）
@@ -1033,6 +1047,7 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
         case 'recorder': return log.recorder
         case 'problem': return log.problem
         case 'completionDate': return log.completionDate || ''
+        case 'task': return log.taskTitle || (log.taskId ? '未知任务' : '')
         case 'hours': return log.hours
         case 'detail': return log.detail
         case 'cause': return log.cause

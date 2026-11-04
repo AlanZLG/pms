@@ -1,6 +1,6 @@
 # Fortune-PMS 测试报告
 
-> 📌 最新测试轮次：**v1.11.0 功能与修复回归（2026-10-16）**，见「二十八、v1.11.0 功能与修复回归」（390/390 · 43 文件全绿）。以下一~九章为 v1.1.0 轮次的历史记录，第十~二十五章为后续回归与功能测试，第二十六章为技术债清零与 e2e/CI 沉淀，第二十七章为 v1.10.0 回归，均保留备查。
+> 📌 最新测试轮次：**v1.12.0 功能回归（2026-11-04）**，见「二十九、v1.12.0 功能回归」（463/463 · 50 文件全绿）。以下一~九章为 v1.1.0 轮次的历史记录，第十~二十五章为后续回归与功能测试，第二十六章为技术债清零与 e2e/CI 沉淀，第二十七章为 v1.10.0 回归，第二十八章为 v1.11.0 回归，均保留备查。
 
 **版本**: v1.1.0
 **测试日期**: 2026-07-30
@@ -948,5 +948,36 @@ recall.test.ts 中 extractKeywords 3 项按新行为重写 + 新增 1 项关键�
 | `npm run lint` | 0 错误（4 条历史结构性警告）✅ |
 | `npx vitest run` | **390/390**（43 文件，较 v1.10.0 净增 44 项）✅ |
 | 新增/更新套件 | oplog-clear.e2e（7）· oplog-export-order.e2e（13）· oplog-import-export.e2e（+表头归一化用例）· oplog-column-order（+4 交错用例）· problem-expand（+cellToggleHint 2）· oplogs-expand.dom（断言更新）✅ |
+
+**可发布状态**: 🟢 就绪
+
+---
+
+## 二十九、v1.12.0 功能回归
+
+**版本**: v1.12.0
+**测试日期**: 2026-11-04
+**测试范围**: 测试文档模块 + 统一审批待办 + 任务↔台账关联增强（方案 A 可见性 + 方案 C 月度对照）+ SHCQ 品牌标识 + 弹窗导航守卫
+
+### 29.1 新增功能验证
+
+1. **测试文档**（`tests/test-doc.test.ts`）：项目内 CRUD、自定义列网格保存、版本快照逐版落库与一键回滚、快照 50 版上限自动清理、Excel 导入/导出、软删除进回收站与恢复（仅 owner/admin）、权限口径（成员可编辑/guest 只读）✅
+2. **统一审批待办**（`tests/approvals.test.ts` 12 用例）：未登录 401 ✅、权限过滤（admin 两类全见 / finance 预算+隐式删除审批 / 持有 `project.approve_delete` 的自定义角色 / member 空集）✅、批量通过与驳回逐条容错（部分失败返回 succeeded/failed 明细）✅、删除申请批准后项目软删除且通知申请人 ✅
+3. **任务↔台账关联增强**（`tests/task-oplogs.test.ts` 4 用例 + e2e 列序断言）：`GET /api/tasks/:taskId/op-logs` 鉴权/404 ✅、按月聚合降序与 2 位小数舍入 ✅、plannedHours 透传 ✅、仅返回匹配任务且不跨项目 ✅；台账列表/导出回填「关联任务」列（任务名而非 ID，单次 IN 查询）✅
+4. **弹窗导航守卫**（`tests/modal-nav-guard.dom.test.tsx`）：全屏遮罩判定（fixed+inset-0+高 z-index）、排除移动端侧栏遮罩与鼠标穿透层、弹窗打开时拦截路由跳转 ✅
+
+### 29.2 回归验证
+
+1. **导出列序（15 列新表头）**：`oplog-export-order.e2e` 全量用例更新——默认序「关联任务」位于完成日与工时之间；旧自定义序缺失该列时按默认位补齐（位于 recorder 之后/createdAt 之前，与前端 `mergeColumnOrder` 同算法语义）；项目列交错位置原样保留 ✅
+2. **导入导出与模板**：`oplog-import-export.e2e` 默认导出 16 列（序号 + 15 固定列）、行值索引同步、模板 15 固定列 + 自定义列示例 ✅
+3. **交错一致性单测**：`oplog-column-order` 全量 6 场景断言更新（含默认序含 task、旧序补齐位次）✅
+
+### 29.3 自动化基线
+
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc --noEmit` | 0 错误 ✅ |
+| `npx vitest run` | **463/463**（50 文件，较 v1.11.0 净增 73 项）✅ |
+| 新增/更新套件 | test-doc（新）· approvals（新 12）· task-oplogs（新 4）· modal-nav-guard.dom（新）· oplog-column-order · oplog-export-order.e2e · oplog-import-export.e2e（列序断言同步 15 列）✅ |
 
 **可发布状态**: 🟢 就绪

@@ -6,7 +6,7 @@
 
 import { Router, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
-import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo, attachmentRepo, dependencyRepo, historyRepo, savedFilterRepo, type AuditRow } from '../repository/repo.ts'
+import { taskRepo, projectRepo, commentRepo, subtaskRepo, userRepo, notificationRepo, attachmentRepo, dependencyRepo, historyRepo, savedFilterRepo, testDocRepo, opLogRepo, type AuditRow } from '../repository/repo.ts'
 import db from '../db.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
 import { assertProjectReadAccess } from './projects.ts'
@@ -213,6 +213,32 @@ router.get('/tasks/:taskId', (req: AuthRequest, res: Response, next: NextFunctio
     const attachments = attachmentRepo.findByTask(task.id)
     const history = historyRepo.findByTask(task.id, 20)
     res.json({ task, comments, subtasks, attachments, history })
+  } catch (e) { next(e) }
+})
+
+// 任务关联台账聚合（月度对照视图）：台账按 task_id 反查，工时按月聚合用于「计划 vs 实际」
+router.get('/tasks/:taskId/op-logs', (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const task = taskRepo.findById(req.params.taskId)
+    if (!task) throw new ApiError(404, '任务不存在')
+    const logs = opLogRepo.find({ projectId: task.projectId, sortBy: 'logDate', sortDir: 'desc' })
+      .filter((l) => l.taskId === task.id)
+    const monthly = new Map<string, number>()
+    let totalHours = 0
+    for (const l of logs) {
+      const month = (l.logDate || '').slice(0, 7)
+      if (!month) continue
+      monthly.set(month, (monthly.get(month) || 0) + (l.hours || 0))
+      totalHours += l.hours || 0
+    }
+    res.json({
+      logs,
+      monthly: [...monthly.entries()]
+        .sort((a, b) => b[0].localeCompare(a[0]))
+        .map(([month, hours]) => ({ month, hours: Math.round(hours * 100) / 100 })),
+      totalHours: Math.round(totalHours * 100) / 100,
+      plannedHours: task.plannedHours ?? null,
+    })
   } catch (e) { next(e) }
 })
 
@@ -451,7 +477,8 @@ router.get('/trash', (req: AuthRequest, res: Response, next: NextFunction) => {
     const projectId = req.query.projectId as string | undefined
     const tasks = taskRepo.findTrash(projectId)
     const projects = projectRepo.findTrash()
-    res.json({ tasks, projects })
+    const testDocs = testDocRepo.findTrash(projectId)
+    res.json({ tasks, projects, testDocs })
   } catch (e) { next(e) }
 })
 

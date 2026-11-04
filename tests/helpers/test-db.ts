@@ -47,7 +47,10 @@ export function createTestDb(): Database.Database {
       seq INTEGER,
       oplog_extra_columns TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      deleted_at DATETIME
+      deleted_at DATETIME,
+      delete_requested_by TEXT,
+      delete_requested_at DATETIME,
+      delete_reject_comment TEXT
     );
 
     CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_seq ON projects(seq) WHERE seq IS NOT NULL;
@@ -164,6 +167,35 @@ export function createTestDb(): Database.Database {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS test_docs (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      content_json TEXT NOT NULL DEFAULT '[]',
+      version INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL REFERENCES users(id),
+      deleted_at DATETIME,
+      deleted_by TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS test_doc_versions (
+      id TEXT PRIMARY KEY,
+      doc_id TEXT NOT NULL REFERENCES test_docs(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      columns_json TEXT NOT NULL,
+      content_json TEXT NOT NULL,
+      change_summary TEXT,
+      edited_by TEXT NOT NULL REFERENCES users(id),
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(doc_id, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_testdocs_project ON test_docs(project_id);
+    CREATE INDEX IF NOT EXISTS idx_testdocversions_doc ON test_doc_versions(doc_id);
+
     CREATE TABLE IF NOT EXISTS audit_logs (
       id TEXT PRIMARY KEY,
       user_id TEXT,
@@ -247,7 +279,32 @@ export function createTestDb(): Database.Database {
       currency TEXT NOT NULL DEFAULT 'RMB',
       description TEXT,
       created_by TEXT NOT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved','rejected')),
+      approved_by TEXT,
+      approved_at DATETIME,
+      approval_comment TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS roles (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      description TEXT,
+      is_system INTEGER NOT NULL DEFAULT 0,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS permissions (
+      id TEXT PRIMARY KEY,
+      key TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT '其他'
+    );
+
+    CREATE TABLE IF NOT EXISTS role_permissions (
+      role_id TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      permission_id TEXT NOT NULL REFERENCES permissions(id) ON DELETE CASCADE,
+      PRIMARY KEY (role_id, permission_id)
     );
 
     CREATE TABLE IF NOT EXISTS attachments (
@@ -376,11 +433,13 @@ export function seedOpLog(
     system?: string
     category?: string
     logDate?: string
+    taskId?: string | null
+    hours?: number
   } = {},
 ): string {
   const id = opts.id || genId()
   db.prepare(
-    'INSERT INTO op_logs (id, project_id, user_id, category, status, system, log_date, problem, detail, cause, solution) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO op_logs (id, project_id, user_id, category, status, system, log_date, problem, detail, cause, solution, task_id, hours) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
   ).run(
     id,
     opts.projectId ?? null,
@@ -393,6 +452,8 @@ export function seedOpLog(
     opts.detail || '',
     opts.cause || '',
     opts.solution || '',
+    opts.taskId ?? null,
+    opts.hours ?? 0,
   )
   return id
 }

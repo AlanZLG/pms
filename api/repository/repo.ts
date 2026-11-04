@@ -10,6 +10,7 @@ import type {
   ProjectTemplate, TemplateTask, TemplateBudget, TemplateKanbanColumn,
   CustomRole, Permission, PermissionCategory, OpLog,
   Message, MessageThread, OpLogExtraConfig, OpLogCustomField, OpLogCustomFieldType,
+  TestDoc, TestDocColumn, TestDocRow, TestDocVersion, TestDocVersionMeta,
 } from '../../shared/types.ts'
 import type { ProjectType, TemplateCategory } from '../../shared/types.ts'
 
@@ -908,7 +909,7 @@ export const notificationRepo = {
   },
   create(data: {
     userId: string
-    type: 'assign' | 'status' | 'comment' | 'system'
+    type: Notification['type']
     title: string
     body: string
     taskId?: string | null
@@ -1102,6 +1103,224 @@ export const attachmentRepo = {
   },
   delete(id: string): void {
     db.prepare('DELETE FROM attachments WHERE id = ?').run(id)
+  },
+}
+
+// ===== Test Docs（测试文档：类 Excel 网格 + 版本快照） =====
+
+/** 版本快照保留上限：超出后自动清理最旧版本，防膨胀 */
+export const TEST_DOC_VERSION_RETENTION = 50
+
+function parseDocJson<T>(text: unknown, fallback: T): T {
+  try {
+    const v = JSON.parse(String(text ?? ''))
+    return (v ?? fallback) as T
+  } catch {
+    return fallback
+  }
+}
+
+function rowToTestDoc(row: SqlRow): TestDoc {
+  return {
+    id: row.id as string,
+    projectId: row.project_id as string,
+    title: row.title as string,
+    columns: parseDocJson<TestDocColumn[]>(row.columns_json, []),
+    rows: parseDocJson<TestDocRow[]>(row.content_json, []),
+    version: Number(row.version ?? 1),
+    createdById: row.created_by as string,
+    createdByName: (row.created_by_name as string) || undefined,
+    deletedAt: (row.deleted_at as string) || null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+  }
+}
+
+/** 纯函数：对比新旧网格，生成人类可读的变更摘要（单测覆盖） */
+export function computeDocChangeSummary(
+  oldColumns: TestDocColumn[], oldRows: TestDocRow[],
+  newColumns: TestDocColumn[], newRows: TestDocRow[],
+  titleChanged?: { from: string; to: string },
+): string {
+  const parts: string[] = []
+  const oldColById = new Map(oldColumns.map((c) => [c.id, c]))
+  const newColIds = new Set(newColumns.map((c) => c.id))
+  const addedCols = newColumns.filter((c) => !oldColById.has(c.id))
+  const removedCols = oldColumns.filter((c) => !newColIds.has(c.id))
+  const renamedCols = newColumns.filter((c) => oldColById.get(c.id)?.label !== c.label && oldColById.has(c.id))
+  if (addedCols.length) parts.push(`新增列 ${addedCols.map((c) => c.label).join('、')}`)
+  if (removedCols.length) parts.push(`删除列 ${removedCols.map((c) => c.label).join('、')}`)
+  if (renamedCols.length) parts.push(`重命名列 ${renamedCols.map((c) => c.label).join('、')}`)
+
+  const oldRowIds = new Set(oldRows.map((r) => r.id))
+  const newRowIds = new Set(newRows.map((r) => r.id))
+  const addedRows = newRows.filter((r) => !oldRowIds.has(r.id)).length
+  const removedRows = oldRows.filter((r) => !newRowIds.has(r.id)).length
+  if (addedRows) parts.push(`新增 ${addedRows} 行`)
+  if (removedRows) parts.push(`删除 ${removedRows} 行`)
+
+  const newRowById = new Map(newRows.map((r) => [r.id, r]))
+  let changedCells = 0
+  for (const oldRow of oldRows) {
+    const newRow = newRowById.get(oldRow.id)
+    if (!newRow) continue
+    for (const colId of new Set([...oldRow.cells ? Object.keys(oldRow.cells) : [], ...Object.keys(newRow.cells)])) {
+      if ((oldRow.cells?.[colId] ?? '') !== (newRow.cells?.[colId] ?? '')) changedCells++
+    }
+  }
+  if (changedCells) parts.push(`修改 ${changedCells} 个单元格`)
+  if (titleChanged) parts.push(`标题改为「${titleChanged.to}」`)
+  return parts.length ? parts.join(' · ') : '无内容变更'
+}
+
+export const testDocRepo = {
+  findByProject(projectId: string): TestDoc[] {
+    const rows = db.prepare(`
+      SELECT d.*, u.name AS created_by_name
+      FROM test_docs d JOIN users u ON d.created_by = u.id
+      WHERE d.project_id = ? AND d.deleted_at IS NULL
+      ORDER BY d.created_at DESC
+    `).all(projectId) as SqlRow[]
+    return rows.map(rowToTestDoc)
+  },
+  findById(id: string): TestDoc | null {
+    const row = db.prepare(`
+      SELECT d.*, u.name AS created_by_name
+      FROM test_docs d JOIN users u ON d.created_by = u.id
+      WHERE d.id = ? AND d.deleted_at IS NULL
+    `).get(id) as SqlRow
+    return row ? rowToTestDoc(row) : null
+  },
+  findByIdWithTrash(id: string): TestDoc | null {
+    const row = db.prepare(`
+      SELECT d.*, u.name AS created_by_name
+      FROM test_docs d JOIN users u ON d.created_by = u.id
+      WHERE d.id = ?
+    `).get(id) as SqlRow
+    return row ? rowToTestDoc(row) : null
+  },
+  findTrash(projectId?: string): (TestDoc & { projectName: string })[] {
+    const rows = db.prepare(`
+      SELECT d.*, u.name AS created_by_name, p.name AS project_name
+      FROM test_docs d
+      JOIN users u ON d.created_by = u.id
+      JOIN projects p ON d.project_id = p.id
+      WHERE d.deleted_at IS NOT NULL ${projectId ? 'AND d.project_id = ?' : ''}
+      ORDER BY d.deleted_at DESC
+    `).all(...(projectId ? [projectId] : [])) as SqlRow[]
+    return rows.map((r) => ({ ...rowToTestDoc(r), projectName: r.project_name as string }))
+  },
+  create(data: { projectId: string; title: string; columns: TestDocColumn[]; rows: TestDocRow[]; userId: string }): TestDoc {
+    const id = genId()
+    const now = new Date().toISOString()
+    const tx = db.transaction(() => {
+      db.prepare(
+        `INSERT INTO test_docs (id, project_id, title, columns_json, content_json, version, created_by, created_at, updated_at)
+         VALUES (?,?,?,?,?,1,?,?,?)`,
+      ).run(id, data.projectId, data.title, JSON.stringify(data.columns), JSON.stringify(data.rows), data.userId, now, now)
+      db.prepare(
+        `INSERT INTO test_doc_versions (id, doc_id, version, columns_json, content_json, change_summary, edited_by, created_at)
+         VALUES (?,?,?,?,?,?,?,?)`,
+      ).run(genId(), id, 1, JSON.stringify(data.columns), JSON.stringify(data.rows), '创建文档', data.userId, now)
+    })
+    tx()
+    return this.findById(id)!
+  },
+  /**
+   * 保存（乐观锁）：baseVersion 与当前版本不一致抛 409；
+   * 内容无变更时直接返回不产生新版本；有变更则版本 +1 并落全量快照。
+   */
+  update(id: string, data: {
+    title?: string
+    columns: TestDocColumn[]
+    rows: TestDocRow[]
+    userId: string
+    baseVersion?: number
+    summaryOverride?: string
+  }): TestDoc {
+    const doc = this.findById(id)
+    if (!doc) throw new ApiError(404, '测试文档不存在')
+    if (data.baseVersion !== undefined && doc.version !== data.baseVersion) {
+      throw new ApiError(409, '文档已被他人修改，请刷新后重试')
+    }
+    const title = data.title ?? doc.title
+    const summary = data.summaryOverride
+      ?? computeDocChangeSummary(doc.columns, doc.rows, data.columns, data.rows,
+        title !== doc.title ? { from: doc.title, to: title } : undefined)
+    if (summary === '无内容变更') return doc
+    const newVersion = doc.version + 1
+    const now = new Date().toISOString()
+    const tx = db.transaction(() => {
+      db.prepare(
+        'UPDATE test_docs SET title = ?, columns_json = ?, content_json = ?, version = ?, updated_at = ? WHERE id = ?',
+      ).run(title, JSON.stringify(data.columns), JSON.stringify(data.rows), newVersion, now, id)
+      db.prepare(
+        `INSERT INTO test_doc_versions (id, doc_id, version, columns_json, content_json, change_summary, edited_by, created_at)
+         VALUES (?,?,?,?,?,?,?,?)`,
+      ).run(genId(), id, newVersion, JSON.stringify(data.columns), JSON.stringify(data.rows), summary, data.userId, now)
+      db.prepare(
+        `DELETE FROM test_doc_versions WHERE doc_id = ? AND version <= ?`,
+      ).run(id, newVersion - TEST_DOC_VERSION_RETENTION)
+    })
+    tx()
+    return this.findById(id)!
+  },
+  /** 回滚到指定版本：内容取该版本快照，产生新版本（履历可追溯回滚动作） */
+  rollback(id: string, version: number, userId: string): TestDoc {
+    const snapshot = this.getVersion(id, version)
+    if (!snapshot) throw new ApiError(404, '版本不存在')
+    return this.update(id, {
+      columns: snapshot.columns,
+      rows: snapshot.rows,
+      userId,
+      summaryOverride: `回滚到 v${version}`,
+    })
+  },
+  listVersions(docId: string): TestDocVersionMeta[] {
+    const rows = db.prepare(`
+      SELECT v.id, v.doc_id, v.version, v.change_summary, v.edited_by, v.created_at, u.name AS edited_by_name
+      FROM test_doc_versions v JOIN users u ON v.edited_by = u.id
+      WHERE v.doc_id = ?
+      ORDER BY v.version DESC
+    `).all(docId) as SqlRow[]
+    return rows.map((r) => ({
+      id: r.id as string,
+      docId: r.doc_id as string,
+      version: Number(r.version),
+      changeSummary: (r.change_summary as string) || '',
+      editedById: r.edited_by as string,
+      editedByName: (r.edited_by_name as string) || undefined,
+      createdAt: r.created_at as string,
+    }))
+  },
+  getVersion(docId: string, version: number): TestDocVersion | null {
+    const row = db.prepare(`
+      SELECT v.*, u.name AS edited_by_name
+      FROM test_doc_versions v JOIN users u ON v.edited_by = u.id
+      WHERE v.doc_id = ? AND v.version = ?
+    `).get(docId, version) as SqlRow
+    if (!row) return null
+    return {
+      id: row.id as string,
+      docId: row.doc_id as string,
+      version: Number(row.version),
+      changeSummary: (row.change_summary as string) || '',
+      editedById: row.edited_by as string,
+      editedByName: (row.edited_by_name as string) || undefined,
+      createdAt: row.created_at as string,
+      columns: parseDocJson<TestDocColumn[]>(row.columns_json, []),
+      rows: parseDocJson<TestDocRow[]>(row.content_json, []),
+    }
+  },
+  softDelete(id: string, userId: string): void {
+    const now = new Date().toISOString()
+    db.prepare('UPDATE test_docs SET deleted_at = ?, deleted_by = ? WHERE id = ?').run(now, userId, id)
+  },
+  restore(id: string): void {
+    db.prepare('UPDATE test_docs SET deleted_at = NULL, deleted_by = NULL WHERE id = ?').run(id)
+  },
+  physicalDelete(id: string): void {
+    db.prepare('DELETE FROM test_docs WHERE id = ?').run(id)
   },
 }
 

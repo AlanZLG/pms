@@ -186,7 +186,7 @@ export interface TaskHistory {
 export interface Notification {
   id: string
   userId: string
-  type: 'assign' | 'status' | 'comment' | 'system'
+  type: 'assign' | 'status' | 'comment' | 'doc' | 'system'
   title: string
   body: string
   taskId: string | null
@@ -194,6 +194,51 @@ export interface Notification {
   read: boolean
   createdAt: string
 }
+
+// ===== 测试文档：类 Excel 网格，在线协同编辑，随时导出 xlsx =====
+export interface TestDocColumn {
+  id: string
+  label: string
+  width: number
+}
+
+export interface TestDocRow {
+  id: string
+  cells: Record<string, string>
+}
+
+export interface TestDoc {
+  id: string
+  projectId: string
+  title: string
+  columns: TestDocColumn[]
+  rows: TestDocRow[]
+  /** 当前版本号，每次保存递增 */
+  version: number
+  createdById: string
+  createdByName?: string
+  deletedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface TestDocVersionMeta {
+  id: string
+  docId: string
+  version: number
+  changeSummary: string
+  editedById: string
+  editedByName?: string
+  createdAt: string
+}
+
+export interface TestDocVersion extends TestDocVersionMeta {
+  columns: TestDocColumn[]
+  rows: TestDocRow[]
+}
+
+/** 回收站中的测试文档（附带所属项目名便于展示） */
+export type TestDocTrash = TestDoc & { projectName: string }
 
 // 站内消息：围绕项目/任务上下文在两人之间收发，回复即在同一上下文内继续发新消息
 export interface Message {
@@ -360,6 +405,34 @@ export interface BudgetApproval {
   status: BudgetApprovalStatus
   comment: string
   createdAt: string
+}
+
+// ==================== 统一审批（我的待办） ====================
+
+export type ApprovalType = 'budget' | 'deletion'
+
+/** 待审批条目：预算审批 / 项目删除申请 */
+export interface ApprovalItem {
+  id: string
+  type: ApprovalType
+  /** 展示标题（预算含类别与金额；删除申请为项目名） */
+  title: string
+  projectId: string
+  projectName: string
+  /** 仅预算审批有 */
+  amount?: number
+  /** 仅预算审批有：备注说明 */
+  description?: string
+  /** 申请人（预算创建人 / 删除申请人） */
+  requesterName: string
+  requestedAt: string
+}
+
+export interface BatchApprovalResult {
+  id: string
+  type: ApprovalType
+  ok: boolean
+  error?: string
 }
 
 export interface ProjectExpense {
@@ -593,8 +666,21 @@ export interface OpLog {
   taskId?: string | null
   /** 工时是否已入账到任务工时（task_hours 存在 op_log_id 反指记录） */
   hoursSynced?: boolean
+  /** 关联任务标题（列表/导出时后端批量回填；未关联或任务已删为 null） */
+  taskTitle?: string | null
   createdAt: string
   updatedAt: string
+}
+
+/** 任务关联台账聚合（月度对照视图） */
+export interface TaskOpLogSummary {
+  logs: OpLog[]
+  /** 按台账日期分月的工时合计（倒序），用于月度运维任务「计划 vs 实际」对照 */
+  monthly: { month: string; hours: number }[]
+  /** 台账工时合计 */
+  totalHours: number
+  /** 任务计划工时（未填为 null） */
+  plannedHours: number | null
 }
 
 /** 台账自定义列（扩展字段）数量上限：__ 前缀的内部字段（如 __sourceTaskId）不占名额 */
@@ -607,7 +693,7 @@ export const OP_LOG_MAX_EXTRA_COLUMNS = 10
  */
 export const OP_LOG_DEFAULT_COLUMN_ORDER = [
   'logDate', 'category', 'status', 'project', 'system', 'department',
-  'proposer', 'recorder', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'hours', 'createdAt',
+  'proposer', 'recorder', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'task', 'hours', 'createdAt',
 ] as const
 
 /** 台账自定义列定义（项目级配置）：key 为数据存储键（稳定），label 为显示名/Excel 表头 */

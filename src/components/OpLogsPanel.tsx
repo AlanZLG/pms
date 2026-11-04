@@ -80,7 +80,7 @@ const DEFAULT_COL_ORDER = OP_LOG_DEFAULT_COLUMN_ORDER
 const COL_LABELS: Record<string, string> = {
   logDate: '日期', category: '分类', status: '状态', project: '项目', system: '系统',
   department: '部门', proposer: '提出人', recorder: '记录人', problem: '问题', detail: '详细描述',
-  cause: '原因', solution: '解决方案', completionDate: '完成日', hours: '工时', createdAt: '登记日期',
+  cause: '原因', solution: '解决方案', completionDate: '完成日', task: '关联任务', hours: '工时', createdAt: '登记日期',
 }
 const COL_ORDER_KEY = 'fortune:oplogs:colOrder'
 
@@ -120,6 +120,9 @@ export function mergeColumnOrder(stored: readonly string[], extraKeys: readonly 
 interface OpLogsPanelProps {
   /** 固定项目上下文（项目详情页嵌入时传入）；不传则为全局台账模式 */
   projectId?: string
+  /** 需要定位高亮的台账行（任务抽屉「打开运维台账」跳转）；6 秒后自动清除 */
+  highlightLogId?: string
+  onHighlightDone?: () => void
 }
 
 interface ExtraRow {
@@ -171,7 +174,7 @@ const emptyForm = (): FormState => ({
   taskId: '',
 })
 
-export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
+export default function OpLogsPanel({ projectId, highlightLogId, onHighlightDone }: OpLogsPanelProps) {
   const notify = useAppStore((s) => s.notify)
   const currentUser = useAppStore((s) => s.user)
   const setUser = useAppStore((s) => s.setUser)
@@ -240,6 +243,17 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
   const projectsData = useAsync<Project[]>(() => api.listProjects().then((r) => r.projects), [])
 
   const logs: OpLog[] = useMemo(() => logsData.data?.logs ?? [], [logsData.data])
+
+  // 任务抽屉「打开运维台账」跳转：定位并滚动到目标行，6 秒后自动清除高亮
+  useEffect(() => {
+    if (!highlightLogId) return
+    const t = setTimeout(() => {
+      document.querySelector(`[data-log-id="${highlightLogId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 150)
+    const clear = setTimeout(() => onHighlightDone?.(), 6000)
+    return () => { clearTimeout(t); clearTimeout(clear) }
+  }, [highlightLogId, logs, onHighlightDone])
+
   const projects: Project[] = useMemo(() => projectsData.data ?? [], [projectsData.data])
 
   // 当前上下文项目的台账自定义列配置：启用时展示列/表单/导入导出均按定义的字段与顺序执行
@@ -356,6 +370,8 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
         return <th key={key} className={cn(TH_STICKY, 'w-[280px] min-w-[280px] px-3 py-3 text-left font-medium')}>解决方案</th>
       case 'cause':
         return <th key={key} className={cn(TH_STICKY, 'w-[280px] min-w-[280px] px-3 py-3 text-left font-medium')}>原因</th>
+      case 'task':
+        return <th key={key} className={cn(TH_STICKY, 'whitespace-nowrap px-3 py-3 text-left font-medium')} title={COL_LABELS.task}>关联任务</th>
       case 'hours':
         return <SortTh key={key} col={sortCol('hours')} sort={sort} onToggle={toggleSort} align="right" className={TH_STICKY} />
       case 'createdAt':
@@ -376,6 +392,12 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
       )
     }
     switch (key) {
+      case 'task':
+        return (
+          <td key={key} className="max-w-[160px] truncate px-3 py-3 text-text-secondary" title={log.taskTitle || undefined}>
+            {log.taskTitle || (log.taskId ? '未知任务' : <span className="text-muted">—</span>)}
+          </td>
+        )
       case 'logDate':
         return <td key={key} className="whitespace-nowrap px-3 py-3 text-text-secondary">{log.logDate || '-'}</td>
       case 'category':
@@ -1460,7 +1482,11 @@ export default function OpLogsPanel({ projectId }: OpLogsPanelProps) {
             </thead>
             <tbody>
               {logs.map((log) => (
-                <tr key={log.id} className="border-b border-bg-border/50 align-top hover:bg-bg-soft/50">
+                <tr
+                  key={log.id}
+                  data-log-id={log.id}
+                  className={cn('border-b border-bg-border/50 align-top hover:bg-bg-soft/50', highlightLogId === log.id && 'bg-brand/10 ring-1 ring-inset ring-brand/40')}
+                >
                   <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-muted">{log.seq ?? '-'}</td>
                   {columnOrder.map((key) => renderTd(log, key))}
                   <td className="whitespace-nowrap px-3 py-3 text-right">

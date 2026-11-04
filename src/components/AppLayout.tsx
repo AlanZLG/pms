@@ -28,6 +28,8 @@ import { useNotificationStore } from '@/stores/notifications'
 import { useTheme } from '@/hooks/useTheme'
 import { Avatar } from '@/components/ui'
 import NotificationDropdown from '@/components/NotificationDropdown'
+import { Logo } from '@/components/Logo'
+import { ModalNavGuard } from '@/components/ModalNavGuard'
 import GlobalSearch from '@/components/GlobalSearch'
 import HoursLogDialog from '@/components/HoursLogDialog'
 
@@ -76,6 +78,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="app-bg flex h-full min-h-0">
+      {/* 弹窗未关闭时禁止路由跳转（含浏览器前进/后退） */}
+      <ModalNavGuard />
       {/* 侧边栏 */}
       <aside
         className={cn(
@@ -190,13 +194,11 @@ function SidebarContent({
   return (
     <>
       <div className="flex h-16 items-center gap-2.5 px-4">
-        <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-grad text-text-primary shadow-glow">
-          <Sparkles className="h-5 w-5" />
-        </div>
+        <Logo size={36} />
         {!collapsed && (
           <div>
-            <p className="font-display text-lg leading-none text-text-primary">Fortune</p>
-            <p className="text-[11px] text-muted">项目管理系统</p>
+            <p className="font-display text-lg leading-tight text-text-primary">Fortune</p>
+            <p className="mt-0.5 text-[13px] font-medium tracking-[0.22em] text-brand-soft">项目管理系统</p>
           </div>
         )}
       </div>

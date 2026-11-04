@@ -134,6 +134,34 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 测试文档：类 Excel 网格在线编辑，软删除进回收站（deleted_at/deleted_by）
+CREATE TABLE IF NOT EXISTS test_docs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  columns_json TEXT NOT NULL DEFAULT '[]',
+  content_json TEXT NOT NULL DEFAULT '[]',
+  version INTEGER NOT NULL DEFAULT 1,
+  created_by TEXT NOT NULL REFERENCES users(id),
+  deleted_at DATETIME,
+  deleted_by TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 测试文档版本快照：每次保存落一条全量快照，供修改履历展示与回滚
+CREATE TABLE IF NOT EXISTS test_doc_versions (
+  id TEXT PRIMARY KEY,
+  doc_id TEXT NOT NULL REFERENCES test_docs(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  columns_json TEXT NOT NULL,
+  content_json TEXT NOT NULL,
+  change_summary TEXT,
+  edited_by TEXT NOT NULL REFERENCES users(id),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(doc_id, version)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -144,6 +172,8 @@ CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(read);
 CREATE INDEX IF NOT EXISTS idx_messages_recipient ON messages(recipient_id);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_testdocs_project ON test_docs(project_id);
+CREATE INDEX IF NOT EXISTS idx_testdocversions_doc ON test_doc_versions(doc_id);
 
 -- 全量操作审计（v1.10.0）：所有非 GET 请求统一留痕，账号操作轨迹可查、可按模块/动作分类管理
 CREATE TABLE IF NOT EXISTS audit_logs (

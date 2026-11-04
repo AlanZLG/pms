@@ -42,6 +42,7 @@ import {
   Replace,
   History,
   Clock,
+  FileText,
 } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
@@ -63,6 +64,7 @@ import HoursLogDialog from '@/components/HoursLogDialog'
 import BudgetPanel from '@/components/BudgetPanel'
 import OpLogsPanel from '@/components/OpLogsPanel'
 import GanttChart from '@/components/GanttChart'
+import TestDocPanel from '@/components/TestDocPanel'
 import KanbanColumnDialog from '@/components/KanbanColumnDialog'
 import MemberImportDialog from '@/components/MemberImportDialog'
 import { useAppStore } from '@/stores/app'
@@ -114,7 +116,7 @@ export default function ProjectDetail() {
   const currentUser = useAppStore((s) => s.user)
   const notify = useAppStore((s) => s.notify)
 
-  const [view, setView] = useState<'list' | 'kanban' | 'gantt'>('gantt')
+  const [view, setView] = useState<'list' | 'kanban' | 'gantt' | 'docs'>('gantt')
   const [sortMode, setSortMode] = useState<KanbanSortMode>('manual')
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all')
@@ -129,6 +131,8 @@ export default function ProjectDetail() {
   const [hoursTask, setHoursTask] = useState<Task | null>(null)
   const [showBudget, setShowBudget] = useState(false)
   const [showOpLogs, setShowOpLogs] = useState(false)
+  // 任务抽屉「打开运维台账」跳转：要高亮的台账行 ID（6 秒后由 OpLogsPanel 回调清除）
+  const [opLogHighlightId, setOpLogHighlightId] = useState<string | null>(null)
   const [taskInitialDates, setTaskInitialDates] = useState<{ startDate?: string; dueDate?: string }>({})
 
   const [selectMode, setSelectMode] = useState(false)
@@ -772,24 +776,28 @@ export default function ProjectDetail() {
 
       {/* 工具栏 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="relative max-w-xs flex-1">
-          <Input
-            placeholder="搜索任务"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            disabled={selectMode}
-          />
-        </div>
+        {view !== 'docs' && (
+          <div className="relative max-w-xs flex-1">
+            <Input
+              placeholder="搜索任务"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              disabled={selectMode}
+            />
+          </div>
+        )}
         <div className="flex items-center gap-2">
-          <Button
-            variant={Object.keys(advancedFilter).length > 0 ? 'primary' : 'ghost'}
-            size="sm"
-            onClick={() => setShowAdvancedFilter(!showAdvancedFilter)}
-          >
-            <Filter className="h-3.5 w-3.5" />
-            {Object.keys(advancedFilter).length > 0 ? `筛选中 (${filtered.length})` : '高级筛选'}
-            {showAdvancedFilter ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </Button>
+          {view !== 'docs' && (
+            <Button
+              variant={Object.keys(advancedFilter).length > 0 ? 'primary' : 'ghost'}
+              size="sm"
+              onClick={() => setShowAdvancedFilter(!showAdvancedFilter)}
+            >
+              <Filter className="h-3.5 w-3.5" />
+              {Object.keys(advancedFilter).length > 0 ? `筛选中 (${filtered.length})` : '高级筛选'}
+              {showAdvancedFilter ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            </Button>
+          )}
           {view === 'list' && !selectMode && (
             <Button variant="ghost" size="sm" onClick={() => setSelectMode(true)}>
               <CheckSquare className="h-3.5 w-3.5" /> 批量操作
@@ -861,12 +869,22 @@ export default function ProjectDetail() {
             >
               <GanttIcon className="h-4 w-4" />
             </button>
+            <button
+              onClick={() => setView('docs')}
+              className={
+                'rounded-md p-1.5 transition ' +
+                (view === 'docs' ? 'bg-brand text-text-primary' : 'text-muted hover:text-text-secondary')
+              }
+              title="测试文档"
+            >
+              <FileText className="h-4 w-4" />
+            </button>
           </div>
         </div>
       </div>
 
-      {/* 高级筛选面板 */}
-      {showAdvancedFilter && (
+      {/* 高级筛选面板（测试文档视图不展示任务筛选） */}
+      {showAdvancedFilter && view !== 'docs' && (
         <div className="rounded-xl border border-bg-border bg-bg-panel/60 p-4 animate-fade-up">
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {/* 状态多选 */}
@@ -1333,15 +1351,21 @@ export default function ProjectDetail() {
       {/* 内容 */}
       {showBudget && <BudgetPanel projectId={projectId} />}
       {showOpLogs && (
-        <div className="mb-4 rounded-2xl border border-bg-border bg-bg-panel/40 p-4">
+        <div id="oplogs-block" className="mb-4 rounded-2xl border border-bg-border bg-bg-panel/40 p-4">
           <h3 className="mb-3 text-sm font-medium text-text-secondary">
             {projectLedgerLabel(project.projectType)}（本项目）
           </h3>
-          <OpLogsPanel projectId={projectId} />
+          <OpLogsPanel
+            projectId={projectId}
+            highlightLogId={opLogHighlightId}
+            onHighlightDone={() => setOpLogHighlightId(null)}
+          />
         </div>
       )}
 
       <div key={view} className="animate-fade-up">
+      {view === 'docs' && <TestDocPanel project={project} currentUser={currentUser} />}
+
       {view === 'list' ? (
         filtered.length === 0 ? (
           <EmptyState title="没有匹配的任务" hint="调整筛选条件或新建任务" />
@@ -1469,7 +1493,7 @@ export default function ProjectDetail() {
             </table>
           </div>
         )
-      ) : (
+      ) : view === 'kanban' ? (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {(kanbanColumns.length > 0 ? kanbanColumns : columns).map((col) => {
@@ -1512,7 +1536,7 @@ export default function ProjectDetail() {
             })}
           </div>
         </DndContext>
-      )}
+      ) : null}
 
       {view === 'gantt' && (
         <div className="h-[calc(100vh-220px)] min-h-[500px]">
@@ -1577,6 +1601,11 @@ export default function ProjectDetail() {
         taskId={drawerTaskId}
         onClose={() => setDrawerTaskId(null)}
         onChanged={data.reload}
+        onOpenOpLog={(logId) => {
+          setShowOpLogs(true)
+          setOpLogHighlightId(logId)
+          setTimeout(() => document.getElementById('oplogs-block')?.scrollIntoView({ block: 'start', behavior: 'smooth' }), 250)
+        }}
       />
 
       <HoursLogDialog

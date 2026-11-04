@@ -1,4 +1,17 @@
-<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="32" height="32" fill="#0A0B0D"/>
-<path d="M26.6677 23.7149H8.38057V20.6496H5.33301V8.38159H26.6677V23.7149ZM8.38057 20.6496H23.6201V11.4482H8.38057V20.6496ZM16.0011 16.0021L13.8461 18.1705L11.6913 16.0021L13.8461 13.8337L16.0011 16.0021ZM22.0963 16.0008L19.9414 18.1691L17.7865 16.0008L19.9414 13.8324L22.0963 16.0008Z" fill="#32F08C"/>
+<svg width="48" height="48" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="48" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#1E3557"/>
+<stop offset="1" stop-color="#0B1524"/>
+</linearGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="0" y2="48" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#F2C879"/>
+<stop offset="1" stop-color="#D39A35"/>
+</linearGradient>
+</defs>
+<rect width="48" height="48" rx="10" fill="url(#bg)"/>
+<rect x="1.5" y="1.5" width="45" height="45" rx="8.8" stroke="url(#gold)" stroke-width="1.4"/>
+<text x="25" y="20.6" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="1.5" fill="url(#gold)" font-family="Georgia,'Times New Roman',serif">SH</text>
+<path d="M24 23.4 L25.5 25 L24 26.6 L22.5 25 Z" fill="url(#gold)"/>
+<text x="25" y="40.2" text-anchor="middle" font-size="17" font-weight="800" letter-spacing="1.5" fill="url(#gold)" font-family="Georgia,'Times New Roman',serif">CQ</text>
 </svg>
