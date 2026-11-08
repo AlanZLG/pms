@@ -511,7 +511,7 @@ router.get('/stats/hours-by-user', financeRequired, (req: AuthRequest, res: Resp
 
 router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const { projectId } = req.query as Record<string, string>
+    const { projectId, startDate, endDate } = req.query as Record<string, string>
 
     // 项目总览：预算/支出各自子查询聚合后 1:1 对齐，避免 b×e 笛卡尔积放大金额
     let projectQuery = `
@@ -553,7 +553,7 @@ router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Respo
 
     // 人员成本：一次查全部项目（替代原来每项目两查的 N+1）
     // 成本按行计价：优先用工时登记时冻结的快照单价，旧数据（快照为空）回退实时价
-    const memberRows = db.prepare(`
+    let memberSql = `
       SELECT t.project_id as project_id,
              u.id as user_id, u.name as user_name, u.role as user_role,
              COALESCE(u.is_outsourced, uc.is_outsourced, 0) as is_outsourced,
@@ -576,8 +576,18 @@ router.get('/stats/project-cost', financeRequired, (req: AuthRequest, res: Respo
       LEFT JOIN user_categories uc ON u.category_id = uc.id
       LEFT JOIN project_members pm ON pm.project_id = t.project_id AND pm.user_id = u.id
       WHERE t.project_id IN (${inClause})
-      GROUP BY t.project_id, u.id
-    `).all(...ids) as SqlRow[]
+    `
+    // 人员成本支持按登记日期段过滤：缺省不传 = 历史累计；前端缺省传当月起止 = 当月累积
+    const memberParams: SqlParam[] = [...ids]
+    if (startDate) {
+      memberSql += ' AND th.date >= ?'
+      memberParams.push(startDate)
+    }
+    if (endDate) {
+      memberSql += ' AND th.date <= ?'
+      memberParams.push(endDate)
+    }
+    const memberRows = db.prepare(memberSql + ' GROUP BY t.project_id, u.id').all(...memberParams) as SqlRow[]
 
     // 项目实际工时总计（分类行的 hours 沿用原口径：项目总实际工时）
     const projectHours: Record<string, number> = {}

@@ -142,7 +142,10 @@ export default function HoursReport() {
   const unassignedPlannedHours = hoursRes.data?.unassignedPlannedHours || 0
   // 人员-项目工时矩阵：与项目筛选联动（选具体项目时矩阵只展示该项目列）
   const hoursByUser = useAsync<HoursByUserProject[]>(() => api.listHoursByUser(startDate, endDate, projectId || undefined).then((r) => r.data), [startDate, endDate, projectId])
-  const projectCost = useAsync<ProjectCostSummary[]>(() => api.listProjectCost(projectId || undefined).then((r) => r.data), [projectId])
+  const projectCost = useAsync<ProjectCostSummary[]>(
+    () => api.listProjectCost(projectId || undefined, startDate, endDate).then((r) => r.data),
+    [projectId, startDate, endDate],
+  )
 
   // 服务端已完成过滤，直接使用
   const filteredHours = allHours
@@ -770,9 +773,12 @@ export default function HoursReport() {
       </div>
 
       <Card className="p-5">
-        <h3 className="mb-4 flex items-center gap-2 font-display text-lg text-text-primary">
-          <Users2 className="h-5 w-5 text-brand-soft" /> 人员成本明细
-        </h3>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
+            <Users2 className="h-5 w-5 text-brand-soft" /> 人员成本明细
+          </h3>
+          <span className="text-xs text-muted">统计区间：{startDate} ~ {endDate}（跟随上方日期筛选）</span>
+        </div>
         {costDenied ? (
           <EmptyState title="仅财务与管理员可见" hint="人员成本数据需要相应权限" />
         ) : projectCost.error && !isPermissionError(projectCost.error) ? (

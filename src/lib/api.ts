@@ -439,9 +439,13 @@ export const api = {
     if (params.length) url += '?' + params.join('&')
     return request<{ data: HoursByUserProject[] }>(url)
   },
-  listProjectCost: (projectId?: string) => {
+  listProjectCost: (projectId?: string, startDate?: string, endDate?: string) => {
     let url = '/api/stats/project-cost'
-    if (projectId) url += `?projectId=${projectId}`
+    const params: string[] = []
+    if (projectId) params.push(`projectId=${projectId}`)
+    if (startDate) params.push(`startDate=${startDate}`)
+    if (endDate) params.push(`endDate=${endDate}`)
+    if (params.length) url += '?' + params.join('&')
     return request<{ data: ProjectCostSummary[] }>(url)
   },
 
