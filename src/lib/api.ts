@@ -2,7 +2,7 @@
 
 import type {
   User, Project, Task, Comment, Subtask, AuthResponse, Notification,
-  StatsOverview, BurndownData, WorkloadItem, ProjectHealth, Template, Attachment,
+  StatsOverview, BurndownData, WorkloadItem, ProjectHealth, Template, Attachment, DailyBrief,
   TaskHours, ProjectBudget, ProjectExpense, BudgetCategory, BudgetWithProject, TaskOpLogSummary,
   HoursByUserProject, ProjectCostSummary, UserCategory, TaskDependency, TaskHistory,
   SavedFilter, TaskFilter, SearchResult, KanbanColumn, KanbanColumnInput,
@@ -362,6 +362,7 @@ export const api = {
   },
   statsHealth: (projectId?: string) =>
     request<{ health: ProjectHealth[] }>(`/api/stats/health${projectId ? `?projectId=${projectId}` : ''}`),
+  dailyBrief: () => request<DailyBrief>('/api/stats/daily-brief'),
 
   // team
   listUsers: () => request<{ users: (User & { taskCount: number; activeCount: number })[]; limited?: boolean }>('/api/team'),

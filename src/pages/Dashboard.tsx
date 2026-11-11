@@ -12,6 +12,7 @@ import {
   Calendar,
   MessageSquarePlus,
   X,
+  Sparkles,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import {
@@ -26,7 +27,7 @@ import { ContextMenu, SendMessageModal, MessagesTab, MessageMenuIcon, type Conte
 import { useAppStore } from '@/stores/app'
 import { dueLabel, fmtDate } from '@/lib/date'
 import { cn } from '@/lib/utils'
-import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject, ProjectHealth, MessageThread, User, ApprovalItem } from '../../shared/types'
+import type { Task, StatsOverview, BurndownData, Project, BudgetWithProject, ProjectHealth, MessageThread, User, ApprovalItem, DailyBrief } from '../../shared/types'
 import { STATUS_COLORS_HEX, PROJECT_STATUS_META } from '@/lib/constants'
 import { useMemo, useState } from 'react'
 
@@ -79,6 +80,8 @@ export default function Dashboard() {
   const burndown = useSwr<BurndownData>('burndown:all', () => api.burndown(''))
   const projects = useSwr<{ projects: Project[] }>('projects:list', () => api.listProjects())
   const health = useSwr<{ health: ProjectHealth[] }>('stats:health', () => api.statsHealth())
+  // AI 今日建议：后端按 当日+数据指纹 缓存（待办/逾期/审批/未读变化自动重新生成），LLM 失败降级规则文案
+  const briefSwr = useSwr<DailyBrief>(userId ? 'daily-brief' : null, () => api.dailyBrief())
   const healthMap = useMemo(() => new Map((health.data?.health ?? []).map((h) => [h.projectId, h])), [health.data])
   const [overdueOpen, setOverdueOpen] = useState(false)
 // 待办任务 + 我负责项目的逾期任务（同一批请求内派生，避免重复拉取）
@@ -272,8 +275,29 @@ const [msgTarget, setMsgTarget] = useState<{
     <div className="space-y-6 animate-fade-up">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="font-display text-3xl text-text-primary">你好,{user?.name?.split('')[0]} 👋</p>
-          <p className="mt-1 text-sm text-muted">今天有 {tasks.data?.mine.length || 0} 个任务待你推进。</p>
+          <p className="font-display text-3xl text-text-primary">你好，{user?.name || '伙伴'} 👋</p>
+          {/* AI 今日建议：llm=AI 生成（Sparkles 高亮），rule=本地规则兜底 */}
+          {briefSwr.loading ? (
+            <div className="mt-2.5 flex items-center gap-2">
+              <Sparkles className="h-4 w-4 shrink-0 animate-pulse text-brand-soft" />
+              <Skeleton width={320} height={14} />
+              <span className="text-xs text-muted">AI 正在生成今日建议…</span>
+            </div>
+          ) : briefSwr.data ? (
+            <div className="mt-2.5 space-y-1">
+              <p className="flex items-start gap-1.5 text-sm text-text-secondary">
+                <Sparkles className={cn('mt-0.5 h-4 w-4 shrink-0', briefSwr.data.source === 'llm' ? 'text-brand-soft' : 'text-muted')} />
+                <span>{briefSwr.data.summary}</span>
+              </p>
+              {briefSwr.data.suggestions.length > 0 && (
+                <ul className="ml-6 space-y-0.5 text-xs text-muted">
+                  {briefSwr.data.suggestions.map((s, i) => (
+                    <li key={i}>{s}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
         </div>
         <Link
           to="/projects"
@@ -282,186 +306,6 @@ const [msgTarget, setMsgTarget] = useState<{
           打开项目 <ArrowRight className="h-4 w-4" />
         </Link>
       </div>
-
-      <div className="grid grid-cols-2 gap-4 animate-stagger lg:grid-cols-4">
-        <StatCard
-          title="进行中项目"
-          value={overview.data?.activeProjects ?? 0}
-          icon={<FolderKanban className="h-5 w-5" />}
-          tone="brand"
-        />
-        <StatCard
-          title="任务总量"
-          value={totalTasks}
-          icon={<ListTodo className="h-5 w-5" />}
-          tone="sky"
-        />
-        <StatCard
-          title="已完成项目"
-          value={overview.data?.completedProjects ?? 0}
-          icon={<CheckCircle2 className="h-5 w-5" />}
-          tone="ok"
-        />
-        <div onClick={() => overview.data && overview.data.overdueProjects > 0 && setOverdueOpen(true)} className={cn(overview.data && overview.data.overdueProjects > 0 && 'cursor-pointer')}>
-          <StatCard
-            title="逾期项目"
-            value={overview.data?.overdueProjects ?? 0}
-            icon={<AlertTriangle className="h-5 w-5" />}
-            tone="warn"
-          />
-        </div>
-      </div>
-
-      {overdueOpen && (
-        <OverduePanel
-          health={health.data?.health ?? []}
-          onClose={() => setOverdueOpen(false)}
-          onSendMessage={(h) => openProjectMessage({
-            projectId: h.projectId,
-            name: h.projectName,
-            ownerId: h.ownerId,
-            ownerName: h.ownerName,
-            overdueDays: h.overdueDays,
-            dueDate: projectById.get(h.projectId)?.dueDate ?? null,
-          })}
-        />
-      )}
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="p-5 lg:col-span-1">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
-              <Activity className="h-5 w-5 text-brand-soft" /> 任务状态分布
-            </h3>
-          </div>
-          {overview.loading ? (
-            <UiSkeleton className="h-56" />
-          ) : (
-            <div className="flex flex-col items-center">
-              <div className="relative h-48 w-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={pieChartData}
-                      dataKey="value"
-                      innerRadius={56}
-                      outerRadius={80}
-                      paddingAngle={3}
-                      strokeWidth={0}
-                    >
-                      {pieChartData.map((entry) => (
-                        <Cell key={entry.name} fill={STATUS_COLORS_HEX[entry.name as keyof typeof STATUS_COLORS_HEX]} />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="absolute inset-0 flex flex-col items-center justify-center">
-                  <span className="font-mono text-3xl font-semibold text-text-primary">{totalTasks}</span>
-                  <span className="text-xs text-muted">任务总数</span>
-                </div>
-              </div>
-              <div className="mt-4 grid w-full grid-cols-2 gap-2 text-xs">
-                {pieChartData.map((d) => (
-                  <div key={d.name} className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLORS_HEX[d.name as keyof typeof STATUS_COLORS_HEX] }} />
-                    <span className="text-muted">{statusLabel(d.name)}</span>
-                    <span className="ml-auto font-mono text-text-secondary">{d.value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </Card>
-
-        <Card className="p-5 lg:col-span-2">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
-              <TrendingUp className="h-5 w-5 text-brand-soft" /> 14 天任务趋势
-            </h3>
-          </div>
-          {overview.loading ? (
-            <UiSkeleton className="h-56" />
-          ) : trend.length === 0 ? (
-            <EmptyState title="暂无数据" />
-          ) : (
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trend}>
-                  <defs>
-                    <linearGradient id="g-created" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#6366F1" stopOpacity={0.5} />
-                      <stop offset="100%" stopColor="#6366F1" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="g-done" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#10B981" stopOpacity={0.5} />
-                      <stop offset="100%" stopColor="#10B981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
-                  <XAxis dataKey="date" tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} />
-                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} width={28} />
-                  <Tooltip
-                    contentStyle={{
-                      background: '#16203A',
-                      border: '1px solid #243054',
-                      borderRadius: 12,
-                      color: '#E2E8F0',
-                      fontSize: 12,
-                    }}
-                  />
-                  <Area type="monotone" dataKey="created" name="新建" stroke="#6366F1" fill="url(#g-created)" strokeWidth={2} />
-                  <Area type="monotone" dataKey="completed" name="完成" stroke="#10B981" fill="url(#g-done)" strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </Card>
-      </div>
-
-      <Card className="p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="font-display text-lg text-text-primary flex items-center gap-2">
-            <Clock className="h-5 w-5 text-brand-soft" /> 项目进度一览
-          </h3>
-          <Link to="/projects" className="text-xs text-brand-soft hover:underline">
-            查看全部项目
-          </Link>
-        </div>
-        {projects.loading ? (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <UiSkeleton key={i} className="h-36" />
-            ))}
-          </div>
-        ) : projectList.length > 0 ? (
-          <div className="grid gap-4 animate-stagger sm:grid-cols-2 lg:grid-cols-3">
-            {sortedProjects.map((project) => {
-              const h = healthMap.get(project.id)
-              const overdue = h && h.overdueDays > 0
-              return (
-                <ProjectProgressCard
-                  key={project.id}
-                  project={project}
-                  health={h}
-                  onContextMenu={overdue ? (e) => {
-                    e.preventDefault()
-                    setCtxMenu({
-                      x: e.clientX,
-                      y: e.clientY,
-                      items: [
-                        { label: '发消息给负责人', icon: <MessageSquarePlus className="h-4 w-4" />, onClick: () => openProjectMessage({ projectId: project.id, name: project.name, ownerId: project.ownerId, ownerName: project.ownerName || h.ownerName, overdueDays: h.overdueDays, dueDate: project.dueDate }) },
-                        { label: '查看项目', icon: <ArrowRight className="h-4 w-4" />, onClick: () => navigate(`/projects/${project.id}`) },
-                      ],
-                    })
-                  } : undefined}
-                />
-              )
-            })}
-          </div>
-        ) : (
-          <EmptyState title="暂无项目" hint="创建一个新项目开始吧" />
-        )}
-      </Card>
 
       <Card className="p-5">
         <div className="mb-4 flex items-center justify-between">
@@ -703,6 +547,186 @@ const [msgTarget, setMsgTarget] = useState<{
               </ul>
             )
           })()
+        )}
+      </Card>
+
+      <div className="grid grid-cols-2 gap-4 animate-stagger lg:grid-cols-4">
+        <StatCard
+          title="进行中项目"
+          value={overview.data?.activeProjects ?? 0}
+          icon={<FolderKanban className="h-5 w-5" />}
+          tone="brand"
+        />
+        <StatCard
+          title="任务总量"
+          value={totalTasks}
+          icon={<ListTodo className="h-5 w-5" />}
+          tone="sky"
+        />
+        <StatCard
+          title="已完成项目"
+          value={overview.data?.completedProjects ?? 0}
+          icon={<CheckCircle2 className="h-5 w-5" />}
+          tone="ok"
+        />
+        <div onClick={() => overview.data && overview.data.overdueProjects > 0 && setOverdueOpen(true)} className={cn(overview.data && overview.data.overdueProjects > 0 && 'cursor-pointer')}>
+          <StatCard
+            title="逾期项目"
+            value={overview.data?.overdueProjects ?? 0}
+            icon={<AlertTriangle className="h-5 w-5" />}
+            tone="warn"
+          />
+        </div>
+      </div>
+
+      {overdueOpen && (
+        <OverduePanel
+          health={health.data?.health ?? []}
+          onClose={() => setOverdueOpen(false)}
+          onSendMessage={(h) => openProjectMessage({
+            projectId: h.projectId,
+            name: h.projectName,
+            ownerId: h.ownerId,
+            ownerName: h.ownerName,
+            overdueDays: h.overdueDays,
+            dueDate: projectById.get(h.projectId)?.dueDate ?? null,
+          })}
+        />
+      )}
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="p-5 lg:col-span-1">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
+              <Activity className="h-5 w-5 text-brand-soft" /> 任务状态分布
+            </h3>
+          </div>
+          {overview.loading ? (
+            <UiSkeleton className="h-56" />
+          ) : (
+            <div className="flex flex-col items-center">
+              <div className="relative h-48 w-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={pieChartData}
+                      dataKey="value"
+                      innerRadius={56}
+                      outerRadius={80}
+                      paddingAngle={3}
+                      strokeWidth={0}
+                    >
+                      {pieChartData.map((entry) => (
+                        <Cell key={entry.name} fill={STATUS_COLORS_HEX[entry.name as keyof typeof STATUS_COLORS_HEX]} />
+                      ))}
+                    </Pie>
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                  <span className="font-mono text-3xl font-semibold text-text-primary">{totalTasks}</span>
+                  <span className="text-xs text-muted">任务总数</span>
+                </div>
+              </div>
+              <div className="mt-4 grid w-full grid-cols-2 gap-2 text-xs">
+                {pieChartData.map((d) => (
+                  <div key={d.name} className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full" style={{ background: STATUS_COLORS_HEX[d.name as keyof typeof STATUS_COLORS_HEX] }} />
+                    <span className="text-muted">{statusLabel(d.name)}</span>
+                    <span className="ml-auto font-mono text-text-secondary">{d.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <Card className="p-5 lg:col-span-2">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 font-display text-lg text-text-primary">
+              <TrendingUp className="h-5 w-5 text-brand-soft" /> 14 天任务趋势
+            </h3>
+          </div>
+          {overview.loading ? (
+            <UiSkeleton className="h-56" />
+          ) : trend.length === 0 ? (
+            <EmptyState title="暂无数据" />
+          ) : (
+            <div className="h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trend}>
+                  <defs>
+                    <linearGradient id="g-created" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#6366F1" stopOpacity={0.5} />
+                      <stop offset="100%" stopColor="#6366F1" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="g-done" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#10B981" stopOpacity={0.5} />
+                      <stop offset="100%" stopColor="#10B981" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
+                  <XAxis dataKey="date" tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} />
+                  <YAxis tick={{ fill: '#94A3B8', fontSize: 11 }} tickLine={false} axisLine={false} width={28} />
+                  <Tooltip
+                    contentStyle={{
+                      background: '#16203A',
+                      border: '1px solid #243054',
+                      borderRadius: 12,
+                      color: '#E2E8F0',
+                      fontSize: 12,
+                    }}
+                  />
+                  <Area type="monotone" dataKey="created" name="新建" stroke="#6366F1" fill="url(#g-created)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="completed" name="完成" stroke="#10B981" fill="url(#g-done)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <Card className="p-5">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-display text-lg text-text-primary flex items-center gap-2">
+            <Clock className="h-5 w-5 text-brand-soft" /> 项目进度一览
+          </h3>
+          <Link to="/projects" className="text-xs text-brand-soft hover:underline">
+            查看全部项目
+          </Link>
+        </div>
+        {projects.loading ? (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <UiSkeleton key={i} className="h-36" />
+            ))}
+          </div>
+        ) : projectList.length > 0 ? (
+          <div className="grid gap-4 animate-stagger sm:grid-cols-2 lg:grid-cols-3">
+            {sortedProjects.map((project) => {
+              const h = healthMap.get(project.id)
+              const overdue = h && h.overdueDays > 0
+              return (
+                <ProjectProgressCard
+                  key={project.id}
+                  project={project}
+                  health={h}
+                  onContextMenu={overdue ? (e) => {
+                    e.preventDefault()
+                    setCtxMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      items: [
+                        { label: '发消息给负责人', icon: <MessageSquarePlus className="h-4 w-4" />, onClick: () => openProjectMessage({ projectId: project.id, name: project.name, ownerId: project.ownerId, ownerName: project.ownerName || h.ownerName, overdueDays: h.overdueDays, dueDate: project.dueDate }) },
+                        { label: '查看项目', icon: <ArrowRight className="h-4 w-4" />, onClick: () => navigate(`/projects/${project.id}`) },
+                      ],
+                    })
+                  } : undefined}
+                />
+              )
+            })}
+          </div>
+        ) : (
+          <EmptyState title="暂无项目" hint="创建一个新项目开始吧" />
         )}
       </Card>
 

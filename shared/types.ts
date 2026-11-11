@@ -341,6 +341,14 @@ export interface BurndownData {
   actual: number[]
 }
 
+// 仪表盘「今日建议」：llm = AI 生成（当日缓存+数据指纹），rule = 本地规则兜底
+export interface DailyBrief {
+  summary: string
+  suggestions: string[]
+  source: 'llm' | 'rule'
+  model: string | null
+}
+
 export interface WorkloadItem {
   userId: string
   userName: string

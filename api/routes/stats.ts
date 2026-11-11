@@ -2,8 +2,9 @@
 
 import { Router, type Response, type NextFunction } from 'express'
 import db from '../db.ts'
-import { projectRepo, taskRepo, userRepo } from '../repository/repo.ts'
+import { projectRepo, taskRepo, userRepo, messageRepo, budgetRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
+import { llm } from '../lib/llm.ts'
 import type { User, WorkloadItem, Project, Task, ProjectHealth } from '../../shared/types.ts'
 
 const router = Router()
@@ -206,6 +207,124 @@ router.get('/workload', (req: AuthRequest, res: Response, next: NextFunction) =>
     // 时间窗口（天）：缺省/0 = 不过滤（全量）；1-90 有效
     const days = Math.min(Math.max(parseInt(req.query.days as string, 10) || 0, 0), 90)
     res.json({ workload: computeWorkload(user!, projectId, days) })
+  } catch (e) { next(e) }
+})
+
+// ---------- 仪表盘 AI 今日建议 ----------
+// 当日缓存 + 数据指纹：待办/逾期/审批/未读数任一变化即重新生成；LLM 未配置或失败时降级为规则文案
+const WEEKDAY_CN = ['日', '一', '二', '三', '四', '五', '六']
+
+function todayStr(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** 规则文案兜底：零成本，随数据实时变化 */
+function ruleBrief(snap: BriefSnap): { summary: string; suggestions: string[] } {
+  const parts: string[] = []
+  if (snap.overdueTasks > 0) parts.push(`${snap.overdueTasks} 个任务已逾期`)
+  if (snap.pendingApprovals > 0) parts.push(`${snap.pendingApprovals} 项审批待处理`)
+  if (snap.unread > 0) parts.push(`${snap.unread} 条未读消息`)
+  const summary = parts.length
+    ? `${snap.mineCount} 个任务待推进：${parts.join('，')}。`
+    : snap.mineCount > 0
+      ? `今天有 ${snap.mineCount} 个任务待推进，没有逾期和待审批事项，节奏良好。`
+      : '今天暂无待办任务，可以安排项目复盘或规划下周工作。'
+
+  const suggestions: string[] = []
+  if (snap.overdueTasks > 0 && snap.topOverdue.length > 0) {
+    suggestions.push(`优先处理逾期任务「${snap.topOverdue[0]}」${snap.overdueTasks > 1 ? `等 ${snap.overdueTasks} 项` : ''}`)
+  }
+  if (snap.pendingApprovals > 0) suggestions.push(`处理 ${snap.pendingApprovals} 项待审批，避免阻塞他人`)
+  if (snap.mineCount > 0 && snap.topMine.length > 0) suggestions.push(`聚焦「${snap.topMine[0]}」${snap.mineCount > 1 ? `等 ${snap.mineCount} 项待办` : ''}，先难后易`)
+  if (snap.overdueProjects > 0) suggestions.push(`${snap.overdueProjects} 个负责的项目已逾期，建议查看进度并同步风险`)
+  if (suggestions.length === 0) suggestions.push('暂无紧急事项，适合推进长期任务或整理工作台账')
+  return { summary, suggestions: suggestions.slice(0, 3) }
+}
+
+interface BriefSnap {
+  mineCount: number
+  topMine: string[]
+  overdueTasks: number
+  topOverdue: string[]
+  pendingApprovals: number
+  unread: number
+  overdueProjects: number
+}
+
+router.get('/daily-brief', async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const user = userRepo.findById(req.userId!)
+    if (!user) return res.status(401).json({ error: '用户不存在' })
+    const date = todayStr()
+
+    // 数据快照（与仪表盘各卡片同口径）
+    const today0 = new Date(); today0.setHours(0, 0, 0, 0)
+    const mineAll = taskRepo.findByAssigneeAll(user.id)
+      .filter((t) => t.status !== 'done')
+      .sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || ''))
+    const overdueTasks = mineAll.filter((t) => t.dueDate && new Date(t.dueDate) < today0)
+    // 审批口径与 /api/approvals 一致
+    const canApproveBudgets = req.userRole === 'admin' || req.userRole === 'finance'
+    const pendingApprovals = (canApproveBudgets ? budgetRepo.findPending().length : 0)
+      + (req.userRole === 'admin' ? projectRepo.findPendingDeletions().length : 0)
+    const overdueProjects = projectRepo.findAll().filter(
+      (p) => p.ownerId === user.id && p.dueDate && new Date(p.dueDate) < today0 && p.status !== 'completed',
+    ).length
+    const snap: BriefSnap = {
+      mineCount: mineAll.length,
+      topMine: mineAll.slice(0, 3).map((t) => t.title),
+      overdueTasks: overdueTasks.length,
+      topOverdue: overdueTasks.slice(0, 3).map((t) => t.title),
+      pendingApprovals,
+      unread: messageRepo.unreadCount(user.id),
+      overdueProjects,
+    }
+    const fingerprint = `${snap.mineCount}:${snap.overdueTasks}:${snap.pendingApprovals}:${snap.unread}:${snap.overdueProjects}`
+
+    // 命中当日缓存且数据指纹未变 → 直接返回
+    const cached = db.prepare('SELECT * FROM daily_briefs WHERE user_id = ? AND brief_date = ?').get(user.id, date) as
+      | { summary: string; suggestions: string; source: string; model: string | null; fingerprint: string } | undefined
+    if (cached && cached.fingerprint === fingerprint) {
+      return res.json({ summary: cached.summary, suggestions: JSON.parse(cached.suggestions), source: cached.source, model: cached.model })
+    }
+
+    // LLM 可用 → 生成；失败/未启用 → 规则兜底
+    if (llm.enabled()) {
+      const weekday = `星期${WEEKDAY_CN[new Date().getDay()]}`
+      const system = '你是项目管理系统仪表盘的「今日建议」助手。根据用户当天的工作数据，输出友好的中文简报。要求：summary 为一句话总览（不超过 50 字）；suggestions 为 2-3 条具体可执行的建议（每条不超过 40 字，引用任务名，不要空话套话）。只输出 JSON：{"summary":"...","suggestions":["..."]}'
+      const dataText = [
+        `今天是${date}（${weekday}）。`,
+        `指派给我的未完成任务 ${snap.mineCount} 个${snap.topMine.length ? `，最近截止：${snap.topMine.join('、')}` : ''}。`,
+        `其中已逾期 ${snap.overdueTasks} 个${snap.topOverdue.length ? `，如：${snap.topOverdue.join('、')}` : ''}。`,
+        snap.pendingApprovals > 0 ? `等待我审批的事项 ${snap.pendingApprovals} 项。` : '无待审批事项。',
+        snap.unread > 0 ? `未读站内消息 ${snap.unread} 条。` : '站内消息已读清。',
+        snap.overdueProjects > 0 ? `我负责的项目中 ${snap.overdueProjects} 个已逾期。` : '我负责的项目无逾期。',
+      ].join('\n')
+      try {
+        const raw = await llm.chat(
+          [{ role: 'system', content: system }, { role: 'user', content: dataText }],
+          // 思维链模型（Qwen3.8）思考消耗大量 token，300 会在 reasoning 阶段截断导致 content 为空；与 opLogs AI 分析同口径 1200
+          { jsonMode: true, maxTokens: 1200 },
+        )
+        const parsed = JSON.parse(raw) as { summary?: string; suggestions?: string[] }
+        const summary = (parsed.summary || '').trim().slice(0, 120)
+        const suggestions = (parsed.suggestions || []).filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim().slice(0, 60)).slice(0, 3)
+        if (!summary || suggestions.length === 0) throw new Error('AI 返回格式不完整')
+        db.prepare(
+          `INSERT INTO daily_briefs(user_id, brief_date, fingerprint, summary, suggestions, source, model)
+           VALUES (?, ?, ?, ?, ?, 'llm', ?)
+           ON CONFLICT(user_id) DO UPDATE SET brief_date = excluded.brief_date, fingerprint = excluded.fingerprint,
+             summary = excluded.summary, suggestions = excluded.suggestions, source = 'llm', model = excluded.model, created_at = CURRENT_TIMESTAMP`,
+        ).run(user.id, date, fingerprint, summary, JSON.stringify(suggestions), llm.chatModel())
+        return res.json({ summary, suggestions, source: 'llm', model: llm.chatModel() })
+      } catch {
+        // LLM 失败不阻塞仪表盘，落到规则文案（不入缓存，下次数据不变时仍先尝试 AI）
+      }
+    }
+
+    const rule = ruleBrief(snap)
+    return res.json({ summary: rule.summary, suggestions: rule.suggestions, source: 'rule', model: null })
   } catch (e) { next(e) }
 })
 

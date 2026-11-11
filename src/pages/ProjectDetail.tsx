@@ -5,12 +5,17 @@ import { createPortal } from 'react-dom'
 import { useParams, Link, useSearchParams } from 'react-router-dom'
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
   useDroppable,
   closestCorners,
+  pointerWithin,
+  type CollisionDetection,
+  type DragCancelEvent,
   type DragEndEvent,
+  type DragStartEvent,
 } from '@dnd-kit/core'
 import {
   SortableContext,
@@ -329,6 +334,15 @@ export default function ProjectDetail() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
 
+  // 拖拽中的任务（DragOverlay 内容）：源卡片留在原地，悬浮预览跟随指针
+  const [dragTask, setDragTask] = useState<{ task: Task; width?: number } | null>(null)
+
+  // 碰撞检测以指针位置优先（指针不在任何落点内时回退最近角），避免拖到目标列边缘时按"角距离均值"误判到相邻列
+  const kanbanCollisionDetection: CollisionDetection = useCallback((args) => {
+    const within = pointerWithin(args)
+    return within.length > 0 ? within : closestCorners(args)
+  }, [])
+
   // 状态流转到审核中/已完成时提醒补录工时（工时是投入口径，建议随做随记）
   const remindLogHours = useCallback((newStatus: TaskStatus, taskTitle: string) => {
     if (newStatus === 'review' || newStatus === 'done') {
@@ -339,6 +353,7 @@ export default function ProjectDetail() {
   }, [notify])
 
   const handleDragEnd = useCallback(async (e: DragEndEvent) => {
+    setDragTask(null)
     const { active, over } = e
     if (!over) return
     const activeId = String(active.id)
@@ -1494,7 +1509,16 @@ export default function ProjectDetail() {
           </div>
         )
       ) : view === 'kanban' ? (
-        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+        <DndContext
+          sensors={sensors}
+          collisionDetection={kanbanCollisionDetection}
+          onDragStart={(e: DragStartEvent) => {
+            const t = tasks.find((x) => x.id === String(e.active.id))
+            setDragTask(t ? { task: t, width: e.active.rect.current.initial?.width } : null)
+          }}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setDragTask(null)}
+        >
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {(kanbanColumns.length > 0 ? kanbanColumns : columns).map((col) => {
               const statusKey = 'statusKey' in col ? col.statusKey : col.status
@@ -1535,6 +1559,13 @@ export default function ProjectDetail() {
               )
             })}
           </div>
+          {/* 传送到 body：页面容器带 animate-fade-up（transform 会让 position:fixed 退化为相对容器定位） */}
+          {createPortal(
+            <DragOverlay dropAnimation={null}>
+              {dragTask && <TaskDragPreview task={dragTask.task} width={dragTask.width} />}
+            </DragOverlay>,
+            document.body,
+          )}
         </DndContext>
       ) : null}
 
@@ -1744,7 +1775,7 @@ function KanbanCard({
       }}
       className={
         'group cursor-pointer rounded-xl border border-bg-border bg-bg/60 p-3 shadow-sm transition hover:border-brand/40 hover:shadow-glow ' +
-        (isDragging ? 'opacity-60' : '')
+        (isDragging ? 'opacity-40' : '')
       }
     >
       <div className="flex items-start justify-between gap-2">
@@ -1809,6 +1840,43 @@ function KanbanCard({
             </span>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+// 拖拽悬浮预览（DragOverlay 内容）：随指针移动，视觉与看板卡片一致但不含操作按钮
+function TaskDragPreview({ task, width }: { task: Task; width?: number }) {
+  const dl = dueLabel(task.dueDate, task.status === 'done')
+  return (
+    <div
+      className="rounded-xl border border-brand/50 bg-bg/95 p-3 shadow-lg"
+      style={width ? { width } : undefined}
+    >
+      <p className="text-sm font-medium text-text-primary">{task.title}</p>
+      {task.labels.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {task.labels.map((l) => (
+            <LabelTag key={l} label={l} />
+          ))}
+        </div>
+      )}
+      <div className="mt-3 flex items-center justify-between">
+        <PriorityBadge priority={task.priority} />
+        {task.dueDate && (
+          <span
+            className={
+              'text-xs ' +
+              (dl.tone === 'overdue'
+                ? 'text-danger'
+                : dl.tone === 'soon'
+                  ? 'text-warn'
+                  : 'text-muted')
+            }
+          >
+            {dl.text}
+          </span>
+        )}
       </div>
     </div>
   )

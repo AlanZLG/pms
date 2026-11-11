@@ -712,6 +712,18 @@ CREATE TABLE IF NOT EXISTS op_log_embeddings (
   vector TEXT NOT NULL,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 仪表盘 AI 今日建议缓存：按用户+日期缓存 LLM 生成结果，fingerprint 为数据指纹（待办/逾期/审批/未读数），变化自动重新生成
+CREATE TABLE IF NOT EXISTS daily_briefs (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  brief_date TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  suggestions TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'llm' CHECK(source IN ('llm','rule')),
+  model TEXT,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 `)
 
 // 种子数据: 分阶段插入，已存在的阶段会跳过
