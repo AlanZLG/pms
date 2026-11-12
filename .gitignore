@@ -31,3 +31,6 @@ dist-ssr
 # SQLite 运行时数据
 data/
 *.db
+
+# QuantDesk：独立 git 仓库（嵌套隔离，防止误当子目录提交）
+QuantDesk/

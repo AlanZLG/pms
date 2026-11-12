@@ -16,6 +16,7 @@ import type {
   AiChatRequest,
   TestDoc, TestDocVersion, TestDocVersionMeta, TestDocTrash,
 } from '../../shared/types'
+import { invalidateCache } from './cache'
 
 const TOKEN_KEY = 'pm_token'
 
@@ -227,10 +228,19 @@ export const api = {
     request<{ task: Task; comments: Comment[]; subtasks: Subtask[]; attachments: Attachment[]; history: TaskHistory[] }>(`/api/tasks/${taskId}`),
   createTask: (projectId: string, data: Partial<Task>) =>
     request<{ task: Task }>(`/api/projects/${projectId}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
-  updateTask: (taskId: string, data: Partial<Task>) =>
-    request<{ task: Task }>(`/api/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(data) }),
-  updateTaskStatus: (taskId: string, status: Task['status']) =>
-    request<{ task: Task }>(`/api/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  updateTask: async (taskId: string, data: Partial<Task>) => {
+    const r = await request<{ task: Task }>(`/api/tasks/${taskId}`, { method: 'PATCH', body: JSON.stringify(data) })
+    // 状态/截止日变更影响仪表板逾期口径与 AI 建议指纹 → 失效全局缓存，返回仪表板立即拉新
+    invalidateCache('tasks:user:')
+    invalidateCache('daily-brief')
+    return r
+  },
+  updateTaskStatus: async (taskId: string, status: Task['status']) => {
+    const r = await request<{ task: Task }>(`/api/tasks/${taskId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) })
+    invalidateCache('tasks:user:')
+    invalidateCache('daily-brief')
+    return r
+  },
   // 看板列内排序持久化
   reorderTasks: (taskIds: string[]) =>
     request<{ ok: boolean; count: number }>('/api/tasks/reorder', { method: 'POST', body: JSON.stringify({ taskIds }) }),

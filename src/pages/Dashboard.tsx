@@ -121,6 +121,17 @@ const tasks = useSwr<{ mine: Task[]; overdue: OverdueTask[] }>(userId ? `tasks:u
     .map((t) => ({ ...t, projectName: nameById.get(t.projectId) || '' }))
   return { mine, overdue }
 })
+// 待办行快捷完成：完成后 mine/overdue 两页签同步移除（逾期口径已排除 done），AI 建议按新指纹重新生成
+async function completeTask(t: Task) {
+  try {
+    await api.updateTaskStatus(t.id, 'done')
+    notify('success', `「${t.title}」已完成`)
+    tasks.revalidate()
+    briefSwr.revalidate()
+  } catch {
+    notify('error', '操作失败，请重试')
+  }
+}
 const [todoTab, setTodoTab] = useState<'mine' | 'overdue' | 'budget' | 'approvals' | 'messages'>('mine')
 // 统一审批：待审批聚合（预算审批 + 项目删除申请），支持单条/批量通过与驳回
 const approvals = useSwr<{ items: ApprovalItem[] }>(userId ? 'approvals:pending' : null, () => api.listApprovals())
@@ -279,18 +290,21 @@ const [msgTarget, setMsgTarget] = useState<{
           {/* AI 今日建议：llm=AI 生成（Sparkles 高亮），rule=本地规则兜底 */}
           {briefSwr.loading ? (
             <div className="mt-2.5 flex items-center gap-2">
-              <Sparkles className="h-4 w-4 shrink-0 animate-pulse text-brand-soft" />
-              <Skeleton width={320} height={14} />
-              <span className="text-xs text-muted">AI 正在生成今日建议…</span>
+              <Sparkles className="h-5 w-5 shrink-0 animate-pulse text-brand" />
+              <Skeleton width={380} height={16} />
+              <span className="text-sm text-text-secondary">AI 正在生成今日建议…</span>
             </div>
           ) : briefSwr.data ? (
-            <div className="mt-2.5 space-y-1">
-              <p className="flex items-start gap-1.5 text-sm text-text-secondary">
-                <Sparkles className={cn('mt-0.5 h-4 w-4 shrink-0', briefSwr.data.source === 'llm' ? 'text-brand-soft' : 'text-muted')} />
+            <div className="mt-2.5 space-y-1.5">
+              <p className={cn(
+                'flex items-start gap-2 rounded-lg px-3 py-2 text-base font-medium leading-relaxed',
+                briefSwr.data.source === 'llm' ? 'bg-brand/10 text-brand' : 'bg-bg-soft text-text-secondary'
+              )}>
+                <Sparkles className="mt-1 h-5 w-5 shrink-0" />
                 <span>{briefSwr.data.summary}</span>
               </p>
               {briefSwr.data.suggestions.length > 0 && (
-                <ul className="ml-6 space-y-0.5 text-xs text-muted">
+                <ul className="ml-7 list-disc space-y-1 text-sm text-text-secondary marker:text-brand-soft">
                   {briefSwr.data.suggestions.map((s, i) => (
                     <li key={i}>{s}</li>
                   ))}
@@ -506,7 +520,7 @@ const [msgTarget, setMsgTarget] = useState<{
                     <Link
                       key={t.id}
                       to={`/projects/${t.projectId}`}
-                      className="flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
+                      className="group flex items-center gap-3 py-3 transition hover:bg-bg-soft/40"
                       onContextMenu={todoTab === 'overdue' ? (e) => {
                         e.preventDefault()
                         const target = taskMessageTarget(t as OverdueTask)
@@ -541,6 +555,16 @@ const [msgTarget, setMsgTarget] = useState<{
                       >
                         {due.text}
                       </span>
+                      {t.assigneeId === userId && t.status !== 'done' && (
+                        <span
+                          role="button"
+                          title="标记完成"
+                          className="shrink-0 rounded-full p-1 text-muted opacity-0 transition hover:bg-ok/10 hover:text-ok group-hover:opacity-100"
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation(); completeTask(t) }}
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                        </span>
+                      )}
                     </Link>
                   )
                 })}
