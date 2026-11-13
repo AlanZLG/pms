@@ -17,6 +17,7 @@ import type {
   TestDoc, TestDocVersion, TestDocVersionMeta, TestDocTrash,
 } from '../../shared/types'
 import { invalidateCache } from './cache'
+import { todayLocal } from './date'
 
 const TOKEN_KEY = 'pm_token'
 
@@ -889,7 +890,7 @@ export const api = {
     const blob = await res.blob()
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `运维台账_课题表_${new Date().toISOString().slice(0, 10)}.xlsx`
+    a.download = `运维台账_课题表_${todayLocal()}.xlsx`
     a.click()
     URL.revokeObjectURL(a.href)
   },

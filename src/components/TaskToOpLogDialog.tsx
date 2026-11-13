@@ -8,6 +8,7 @@ import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
 import { Button, Input, Textarea } from '@/components/ui'
+import { todayLocal, toDateInputValue } from '@/lib/date'
 import { useAppStore } from '@/stores/app'
 import type { Task } from '../../shared/types'
 
@@ -56,10 +57,11 @@ export default function TaskToOpLogDialog({ open, task, onClose, onCreated }: Pr
     setProposer('')
     setSystem('')
     setDepartment('')
-    setLogDate(new Date().toISOString().slice(0, 10))
+    setLogDate(todayLocal())
     setRecorder(currentUser?.name || '')
     setProblem(task.title)
-    setCompletionDate(task.status === 'done' ? (task.updatedAt || '').slice(0, 10) : '')
+    // updatedAt 是 UTC 时间戳，slice(0, 10) 在东八区 0-8 点会取到前一天，须按本地时区转日期
+    setCompletionDate(task.status === 'done' ? toDateInputValue(task.updatedAt) : '')
     setHours(task.plannedHours ? String(task.plannedHours) : '')
     setDetail(task.description || '')
     setCause('')

@@ -14,6 +14,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ExcelJS from 'exceljs'
+import Database from 'better-sqlite3'
 import { OP_LOG_DEFAULT_COLUMN_ORDER } from '../../shared/types.ts'
 
 const PROJECT_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)))
@@ -182,6 +183,41 @@ describe('台账导出列序 = 界面列设置（端到端）', () => {
       'logDate', 'category', 'status', 'system', 'department', 'proposer', 'recorder',
       'hours', 'problem', 'detail', 'cause', 'solution', 'completionDate', 'task', 'createdAt',
     ]))
+  })
+
+  it('登记日期列值回归：东八区凌晨创建的台账 → 导出按北京日期跨日 +1（而非 UTC 前一天）', async () => {
+    const c = await req('POST', '/op-logs', {
+      projectId, category: '故障处理', status: '待处理', system: '验证系统',
+      logDate: '2026-10-15', problem: '登记日期时区回归', recorder: '管理员',
+    }, adminToken)
+    expect(c.status).toBe(201)
+    const logId = (c.json as { log: { id: string } }).log.id
+
+    // 直改临时库 created_at 为东八区凌晨时刻：北京 2026-11-13 01:30，UTC 日期还是 11-12
+    const poke = new Database(path.join(tmpDir, 'e2e.db'))
+    poke.prepare("UPDATE op_logs SET created_at = '2026-11-12T17:30:00.000Z' WHERE id = ?").run(logId)
+    poke.close()
+
+    const url = `/op-logs/export.xlsx?projectId=${projectId}`
+    const res = await fetch(`${BASE}${url}`, { headers: { Authorization: `Bearer ${adminToken}` } })
+    expect(res.status).toBe(200)
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(Buffer.from(await res.arrayBuffer()) as unknown as ExcelJS.Buffer)
+    const sheet = wb.worksheets[0]
+    const headers: string[] = []
+    sheet.getRow(1).eachCell((cell) => headers.push(String(cell.value)))
+    const problemCol = headers.indexOf('问题') + 1
+    const dateCol = headers.indexOf('登记日期') + 1
+    expect(dateCol).toBeGreaterThan(0)
+    // 找到目标行：「登记日期」必须是北京日期 11-13（修复前的 UTC slice 会是 11-12）
+    let registeredDate: string | null = null
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return
+      if (String(row.getCell(problemCol).value ?? '') === '登记日期时区回归') {
+        registeredDate = String(row.getCell(dateCol).value ?? '')
+      }
+    })
+    expect(registeredDate).toBe('2026-11-13')
   })
 })
 

@@ -3,7 +3,7 @@ import multer from 'multer'
 import ExcelJS from 'exceljs'
 import { opLogRepo, projectRepo, userRepo, taskRepo, activityLogRepo, customFieldRepo, resolveHourlyRate } from '../repository/repo.ts'
 import { authRequired, requirePermission, type AuthRequest } from '../lib/auth.ts'
-import { ApiError, genId } from '../lib/utils.ts'
+import { ApiError, genId, beijingDate } from '../lib/utils.ts'
 import { z } from 'zod'
 import db, { type SqlRow } from '../db.ts'
 import { llm } from '../lib/llm.ts'
@@ -379,7 +379,8 @@ export function syncOpLogHours(opLog: { id: string; userId: string; logDate: str
     if (existing) db.prepare('DELETE FROM task_hours WHERE id = ?').run(existing.id)
     return
   }
-  const date = opLog.logDate || new Date().toISOString().slice(0, 10)
+  // 台账未填日期时兜底：按北京时间取当天（不能用 UTC 的 toISOString().slice，东八区凌晨会入账到前一天）
+  const date = opLog.logDate || beijingDate()
   if (existing) {
     // 计费跟随规则与周表批量一致：用户自定义过计费比例（计费≠实际）的保留，否则跟随新工时
     const curActual = Number(existing.actual_hours) || 0
@@ -1052,7 +1053,7 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
         case 'detail': return log.detail
         case 'cause': return log.cause
         case 'solution': return log.solution
-        case 'createdAt': return log.createdAt ? log.createdAt.slice(0, 10) : ''
+        case 'createdAt': return log.createdAt ? beijingDate(log.createdAt) : ''
         default: return ''
       }
     }
@@ -1114,7 +1115,7 @@ router.get('/op-logs/export.xlsx', (req: AuthRequest, res: Response, next: NextF
     widths.forEach((w, i) => ws.getColumn(i + 1).width = w)
     ws.views = [{ state: 'frozen', ySplit: 1 }]
 
-    const filename = encodeURIComponent(`运维台账_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    const filename = encodeURIComponent(`运维台账_${beijingDate()}.xlsx`)
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`)
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition')

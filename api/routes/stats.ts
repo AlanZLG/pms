@@ -4,6 +4,7 @@ import { Router, type Response, type NextFunction } from 'express'
 import db from '../db.ts'
 import { projectRepo, taskRepo, userRepo, messageRepo, budgetRepo } from '../repository/repo.ts'
 import { authRequired, type AuthRequest } from '../lib/auth.ts'
+import { beijingDaysAgo } from '../lib/utils.ts'
 import { llm } from '../lib/llm.ts'
 import type { User, WorkloadItem, Project, Task, ProjectHealth } from '../../shared/types.ts'
 
@@ -131,7 +132,10 @@ router.get('/burndown', (req: AuthRequest, res: Response, next: NextFunction) =>
 
 // 成员工作量（双口径：任务数 + 工时）
 export function computeWorkload(user: User, projectId: string, days: number): WorkloadItem[] {
+  // since 为 UTC 时刻，与任务 updated_at（时刻）比较用；
+  // 工时口径的窗口下界必须用北京日期（th.date 是北京日期列），UTC 日期在凌晨 0-8 点会多算一天
   const since = days > 0 ? new Date(Date.now() - days * 86400000).toISOString() : ''
+  const sinceDate = days > 0 ? beijingDaysAgo(days) : ''
   const scope = resolveScope(user, projectId)
   // 越权访问指定项目 → 空结果
   if (scope && scope.length === 0) return []
@@ -169,9 +173,9 @@ export function computeWorkload(user: User, projectId: string, days: number): Wo
       clauses.push(`t.project_id IN (${scope.map(() => '?').join(',')})`)
       params.push(...scope)
     }
-    if (since) {
+    if (sinceDate) {
       clauses.push('th.date >= ?')
-      params.push(since.slice(0, 10))
+      params.push(sinceDate)
     }
     const row = db.prepare(
       `SELECT COALESCE(SUM(th.actual_hours), 0) AS h FROM task_hours th JOIN tasks t ON t.id = th.task_id WHERE ${clauses.join(' AND ')}`,

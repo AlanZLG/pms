@@ -13,7 +13,6 @@ import {
   closestCorners,
   pointerWithin,
   type CollisionDetection,
-  type DragCancelEvent,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core'

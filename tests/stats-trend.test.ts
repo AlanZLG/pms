@@ -97,5 +97,22 @@ describe('仪表盘趋势/燃尽时间窗', () => {
       // 理想线终点为 0
       expect(bd.ideal[bd.ideal.length - 1]).toBe(0)
     })
+
+    it('本地 0~8 点完成的任务，actual 线在完成当天下降（旧实现按 UTC 取 key 查不到桶，会晚一天）', () => {
+      const at = (dayOffset: number, h: number) => {
+        const d = new Date(); d.setDate(d.getDate() + dayOffset); d.setHours(h, 0, 0, 0); return d
+      }
+      // 3 天前凌晨 1 点完成（UTC 时刻落在前一天）
+      const t1 = seedTask(db, pid, { title: '凌晨完成', status: 'done' })
+      setTime(t1, at(-5, 9), at(-3, 1))
+
+      const bd = taskRepo.burndown(undefined, 0)
+      const doneDay = new Date(); doneDay.setDate(doneDay.getDate() - 3)
+      const key = `${doneDay.getFullYear()}-${`${doneDay.getMonth() + 1}`.padStart(2, '0')}-${`${doneDay.getDate()}`.padStart(2, '0')}`
+      const idx = bd.dates.indexOf(key)
+      expect(idx).toBeGreaterThan(-1)
+      // 完成当天剩余应清零（修复前 actual 查 UTC 前一天的桶 → 仍为 1）
+      expect(bd.actual[idx]).toBe(0)
+    })
   })
 })

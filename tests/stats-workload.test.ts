@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // 用内存数据库 mock api/db.ts
 vi.mock('../api/db.ts', async () => {
@@ -25,6 +25,9 @@ function seedHours(taskId: string, userId: string, date: string, actualHours: nu
 
 describe('成员工作量 computeWorkload 双口径', () => {
   let adminId: string
+
+  // 凌晨边界用例用 fake 时钟，用例结束统一恢复
+  afterEach(() => vi.useRealTimers())
 
   beforeEach(() => {
     db.prepare('DELETE FROM task_hours').run()
@@ -88,6 +91,19 @@ describe('成员工作量 computeWorkload 双口径', () => {
     expect(item.total).toBe(1) // 旧任务 20 天前更新，被窗口排除
     expect(item.plannedHours).toBe(2)
     expect(item.actualHours).toBe(2) // 只算 1 天前的登记
+  })
+
+  it('工时窗口按北京日历取界：凌晨时段"近 N 天"不含前天（旧实现 UTC 日期界会多算一天）', () => {
+    // mock 到北京 11-13 01:30（UTC 11-12 17:30）→ days=1 窗口 = 昨天(11-12) + 今天
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-12T17:30:00.000Z'))
+    const pid = seedProject(db, adminId, { name: 'P1' })
+    const t = seedTask(db, pid, { title: 'A', status: 'done', assigneeId: adminId })
+    seedHours(t, adminId, '2026-11-11', 8) // 前天：窗口外（旧实现界=UTC 11-11 会把它算进来）
+    seedHours(t, adminId, '2026-11-12', 3) // 昨天：窗口内
+
+    const item = computeWorkload(userRepo.findById(adminId)!, '', 1).find((i) => i.userId === adminId)!
+    expect(item.actualHours).toBe(3)
   })
 
   it('可见范围：guest 只统计自己参与项目的任务与工时', () => {

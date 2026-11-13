@@ -4,7 +4,7 @@
 
 **Fortune PM** · 一款轻量级的团队项目管理 Web 应用
 
-[![Version](https://img.shields.io/badge/version-v1.12.0-blue)](./package.json)
+[![Version](https://img.shields.io/badge/version-v1.13.0-blue)](./package.json)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![SQLite](https://img.shields.io/badge/database-SQLite-lightgrey)](https://www.sqlite.org/)
@@ -385,7 +385,8 @@ fortune-pm/
 - ✅ **v1.10.0** - 项目序号体系与原位改名、工时登记（快速弹窗 + 周表）与台账自动入账双向同步、项目健康度与趋势看板、台账自定义项全局字段库（管理员维护 + 项目负责人勾选启用 + 六种字段类型 text/textarea/number/date/select/url 三端处理）与项目级配置（上限 10）、台账列顺序用户级持久化（导出同序）与界面「原因」列、站内私信、全量操作审计、登录强制改密、数据库 iCloud 异地备份、工时口径一致性修复（周表合计口径/抽屉合并幻影行）
 - ✅ **v1.11.0** - 导入/导出与界面全链路对齐（`mergeExportOrder` 导出列序同序修复、`normHeader` 表头归一化修复自定义列整列丢失）、运维台账一键清空（软删除 + confirm 护栏 + 权限 + 事务清工时）、操作审计明细弹窗、长文本列展开/收起按钮、ESLint 存量清零
 - ✅ **v1.12.0** - 测试文档（项目内类 Excel 用例库：在线编辑、版本快照 50 版与回滚、Excel 导入导出、回收站）、统一审批待办（预算+删除申请聚合、批量审批）、任务↔台账关联增强（任务抽屉关联台账区块、计划 vs 实际月度对照、台账「关联任务」列、双向跳转高亮）、SHCQ 品牌标识、弹窗导航守卫
-- 🔜 **v1.13** - 富文本评论、实时协作、移动端适配、自定义工作流（原 v1.11 规划顺延）
+- ✅ **v1.13.0** - 仪表板 AI 今日建议（daily_briefs 当日缓存 + 数据指纹变更自动重生成，LLM/规则双源降级）、待办聚合卡改版（指派/逾期/预算/审批/消息五页签）、看板拖拽体验修复（DragOverlay 悬浮预览跟手 + 指针优先碰撞检测）、AI 建议可读性增强与待办逾期实时同步、日期时区一致性修复（全库 UTC 日期问题清零：审计时间显示与日界筛选、台账登记/导出日期、工时入账兜底、周表周起点、统计窗口与燃尽分桶统一北京时间口径，自动生成日期不再凌晨错天）
+- 🔜 **v1.14** - 富文本评论、实时协作、移动端适配、自定义工作流（原 v1.11 规划顺延）
 
 ---
 

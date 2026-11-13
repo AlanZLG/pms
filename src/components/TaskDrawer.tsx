@@ -14,7 +14,7 @@ import { getErrorMessage } from '@/lib/errors'
 import { Avatar, Button, PriorityBadge, StatusBadge, LabelTag, Textarea, Input } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
 import { useAsync } from '@/hooks/useAsync'
-import { fromNow, dueLabel } from '@/lib/date'
+import { fromNow, dueLabel, todayLocal } from '@/lib/date'
 import { cn, sortUsers } from '@/lib/utils'
 import { inlineDiff, parseChangeDetail } from '@/lib/diff'
 import TaskToOpLogDialog from '@/components/TaskToOpLogDialog'
@@ -52,7 +52,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged, onOpenOpLog }: 
   const [uploading, setUploading] = useState(false)
   // 工时登记
   const [hours, setHours] = useState<TaskHours[]>([])
-  const [hoursForm, setHoursForm] = useState({ date: new Date().toISOString().slice(0, 10), plannedHours: '', actualHours: '', billedHours: '', description: '' })
+  const [hoursForm, setHoursForm] = useState({ date: todayLocal(), plannedHours: '', actualHours: '', billedHours: '', description: '' })
   const [hoursBusy, setHoursBusy] = useState(false)
   // 转运维台账
   const [showOpLogDialog, setShowOpLogDialog] = useState(false)
@@ -139,7 +139,7 @@ export default function TaskDrawer({ taskId, onClose, onChanged, onOpenOpLog }: 
     setLoading(true)
     setShowAllHistory(false)
     // 切换任务时清空登记表单：避免上一个任务未提交的数值串显到下一个任务
-    setHoursForm({ date: new Date().toISOString().slice(0, 10), plannedHours: '', actualHours: '', billedHours: '', description: '' })
+    setHoursForm({ date: todayLocal(), plannedHours: '', actualHours: '', billedHours: '', description: '' })
     api
       .getTask(taskId)
       .then((r) => {

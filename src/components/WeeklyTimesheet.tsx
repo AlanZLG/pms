@@ -7,16 +7,11 @@ import { ChevronLeft, ChevronRight, Loader2, Plus, Search, X } from 'lucide-reac
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
+import { mondayOf } from '@/lib/date'
 import { Button } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
 
 const DAY_MS = 86400000
-
-function mondayOf(d: Date): string {
-  const day = (d.getDay() + 6) % 7 // 周一 = 0
-  return new Date(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - day * DAY_MS)
-    .toISOString().slice(0, 10)
-}
 
 function fmtMD(iso: string) {
   return `${Number(iso.slice(5, 7))}/${Number(iso.slice(8, 10))}`

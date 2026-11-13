@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom'
 import { ScrollText, Search, RotateCcw, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { Card, Button, EmptyState } from '@/components/ui'
 import { api } from '@/lib/api'
+import { fmtDateTimeSec } from '@/lib/date'
 import { useAppStore } from '@/stores/app'
 import type { AuditLog } from '../../shared/types'
 
@@ -204,7 +205,7 @@ export default function AuditLogs() {
                     onClick={() => setDetailRow(r)}
                     className="cursor-pointer border-b border-border/50 last:border-0 hover:bg-bg-soft/60"
                   >
-                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{r.createdAt.replace('T', ' ').slice(0, 19)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-xs text-muted">{fmtDateTimeSec(r.createdAt)}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-text-primary">{r.userName}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-text-secondary">{moduleLabel(r.module)}</td>
                     <td className="whitespace-nowrap px-3 py-2 text-text-secondary">{actionLabel(r.action)}</td>
@@ -249,7 +250,7 @@ export default function AuditLogs() {
               </Button>
             </div>
             <div className="mb-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-              <div><span className="text-muted">时间：</span><span className="text-text-primary">{detailRow.createdAt.replace('T', ' ').slice(0, 19)}</span></div>
+              <div><span className="text-muted">时间：</span><span className="text-text-primary">{fmtDateTimeSec(detailRow.createdAt)}</span></div>
               <div><span className="text-muted">操作人：</span><span className="text-text-primary">{detailRow.userName}</span></div>
               <div><span className="text-muted">模块：</span><span className="text-text-secondary">{moduleLabel(detailRow.module)}</span></div>
               <div><span className="text-muted">动作：</span><span className="text-text-secondary">{actionLabel(detailRow.action)}</span></div>

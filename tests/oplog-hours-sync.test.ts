@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
 // 用内存数据库 mock api/db.ts
 vi.mock('../api/db.ts', async () => {
@@ -152,6 +152,34 @@ describe('台账工时入账（v1.9.4 方案 A：台账为录入入口，工时�
       syncOpLogHours(log, tid)
       const row = db.prepare('SELECT actual_hours FROM task_hours WHERE op_log_id = ?').get(log.id) as { actual_hours: number }
       expect(row.actual_hours).toBe(8)
+    })
+  })
+
+  // 台账自动生成日期兜底回归：不能用 UTC 的 now.slice(0, 10)，东八区凌晨（0-8 点）会把当天算成前一天
+  describe('台账自动生成日期兜底（北京时间）', () => {
+    afterEach(() => vi.useRealTimers())
+
+    // mock 到北京时间 2026-11-13 01:30（UTC 日期还是 11-12），与真实凌晨登记场景一致
+    const mockEarlyMorning = () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-11-12T17:30:00.000Z'))
+    }
+
+    it('repo 创建台账未填 logDate → 兜底为北京当天（而非 UTC 前一天）', () => {
+      mockEarlyMorning()
+      const log = opLogRepo.create(userId, { projectId, problem: '凌晨无日期登记' })
+      expect(log.logDate).toBe('2026-11-13')
+    })
+
+    it('syncOpLogHours 入账未填日期 → task_hours.date 按北京当天兜底', () => {
+      mockEarlyMorning()
+      const tid = seedTask(db, projectId, { title: '兜底日期任务' })
+      const log = opLogRepo.create(userId, { projectId, problem: '凌晨登记带工时', hours: 2, logDate: '2026-11-12', taskId: tid })
+      // 模拟历史数据/异常入参：入账时 logDate 为空，走 beijingDate() 兜底分支
+      syncOpLogHours({ id: log.id, userId, logDate: null, hours: 2 }, tid)
+      const row = db.prepare('SELECT date FROM task_hours WHERE op_log_id = ?').get(log.id) as { date: string }
+      expect(row.date).toBe('2026-11-13')
+      expect(row.date).not.toBe('2026-11-12') // UTC 日期（修复前错误结果）
     })
   })
 })

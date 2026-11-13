@@ -1,7 +1,7 @@
 // 数据访问层
 
 import db, { type SqlRow, type SqlParam } from '../db.ts'
-import { genId, parseLabels, ApiError } from '../lib/utils.ts'
+import { genId, parseLabels, ApiError, beijingDate } from '../lib/utils.ts'
 import { rankRecallHits, type RecallHit } from '../lib/recall.ts'
 import type {
   User, Project, ProjectMember, Task, Comment, Subtask, Notification, Template, Attachment, TaskStatus,
@@ -698,8 +698,9 @@ export const taskRepo = {
     }
     let remaining = total
     for (let i = 0; i <= totalDays; i++) {
-      const d = new Date(start.getTime() + i * 86400000)
-      const key = d.toISOString().slice(0, 10)
+      // 与 completedByDate / dates 同口径（本地自然日）。旧实现 toISOString 截 UTC 日，
+      // 北京 0~8 点完成的任务查不到对应桶，actual 线会晚一天下降
+      const key = dayKey(start.getTime() + i * 86400000)
       remaining -= completedByDate.get(key) || 0
       actual.push(Math.max(0, remaining))
     }
@@ -2635,7 +2636,8 @@ export const opLogRepo = {
       data.proposer || '',
       data.system || '',
       data.department || '',
-      data.logDate || now.slice(0, 10),
+      // 未填日期时兜底为创建当天：按北京时间（UTC 的 now.slice 在东八区凌晨会算成前一天）
+      data.logDate || beijingDate(now),
       data.recorder || '',
       data.problem,
       data.completionDate || null,

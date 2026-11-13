@@ -1,6 +1,6 @@
 # Fortune-PMS 测试报告
 
-> 📌 最新测试轮次：**v1.12.0 功能回归（2026-11-04）**，见「二十九、v1.12.0 功能回归」（463/463 · 50 文件全绿）。以下一~九章为 v1.1.0 轮次的历史记录，第十~二十五章为后续回归与功能测试，第二十六章为技术债清零与 e2e/CI 沉淀，第二十七章为 v1.10.0 回归，第二十八章为 v1.11.0 回归，均保留备查。
+> 📌 最新测试轮次：**v1.13.0 前置修复 · 日期时区一致性回归（2026-11-13）**，见「三十、日期时区一致性修复回归」（487/487 · 51 文件全绿）。以下一~九章为 v1.1.0 轮次的历史记录，第十~二十五章为后续回归与功能测试，第二十六章为技术债清零与 e2e/CI 沉淀，第二十七章为 v1.10.0 回归，第二十八章为 v1.11.0 回归，第二十九章为 v1.12.0 回归，均保留备查。
 
 **版本**: v1.1.0
 **测试日期**: 2026-07-30
@@ -979,5 +979,39 @@ recall.test.ts 中 extractKeywords 3 项按新行为重写 + 新增 1 项关键�
 | `npx tsc --noEmit` | 0 错误 ✅ |
 | `npx vitest run` | **463/463**（50 文件，较 v1.11.0 净增 73 项）✅ |
 | 新增/更新套件 | test-doc（新）· approvals（新 12）· task-oplogs（新 4）· modal-nav-guard.dom（新）· oplog-column-order · oplog-export-order.e2e · oplog-import-export.e2e（列序断言同步 15 列）✅ |
+
+**可发布状态**: 🟢 就绪
+
+## 三十、日期时区一致性修复回归
+
+**版本**: v1.13.0 前置修复（基线 v1.12.0）
+**测试日期**: 2026-11-13
+**测试范围**: 全库 UTC 日期问题清零——操作审计时间显示与筛选、运维台账登记/导出日期、工时/支出默认日期、统计窗口与燃尽分桶口径
+
+### 30.1 根因与修复原则
+
+数据库统一存储 UTC 时间戳，多处直接 `toISOString().slice(0, 10)` 截取 UTC 日期：东八区 0~8 点自动生成的日期错成前一天、时间显示早 8 小时、周表周起点恒定提前一天。修复原则：**人工填写的日期数据一律不动，只修正"自动生成"日期的计算逻辑，统一按北京时间（UTC+8）**。公共函数沉淀：后端 `beijingDate` / `beijingDaysAgo`（显式 +8h，不依赖服务器时区，Vercel 等 UTC 环境同样正确），前端 `fmtDateTimeSec` / `todayLocal` / `mondayOf`。
+
+### 30.2 修复验证
+
+1. **公共函数**（`tests/beijing-date.test.ts` 7 用例 · `tests/date.test.ts` 17 用例）：beijingDate 凌晨跨日/跨月跨年/导入格式（无 Z）/mock 时钟；beijingDaysAgo 北京日历 N 天前；fmtDateTimeSec 本地格式化；todayLocal 凌晨场景；mondayOf 周一锚定（周五/周一/周日/跨月边界）✅
+2. **操作审计**（`tests/audit.test.ts` 16 用例）：时间列与明细弹窗改 fmtDateTimeSec（修复前每条早 8 小时）；日期筛选按北京日界换算 UTC 边界（含头不含尾，保留 idx_audit_created 索引）——北京 0~8 点记录归入当天；修复前字符串前缀比较导致单日筛选漏凌晨记录、dateTo 排除当天 08:00 后全部记录 ✅
+3. **运维台账**（`tests/oplog-hours-sync.test.ts` 13 用例 · `oplog-export-order.e2e` 14 用例）：repo 层 create 与 syncOpLogHours 兜底日期走 beijingDate（此前兜底分支零覆盖）；新增导出「登记日期」列单元格值断言（临时库 created_at 直改为东八区凌晨时刻，验证跨日 +1）✅
+4. **统计口径**（`tests/stats-workload.test.ts` 7 用例 · `stats-trend.test.ts` 5 用例）：工作量工时口径与周表近 90 天窗口按北京日历取界（mock 时钟凌晨场景，days=1 不含前天）；燃尽图 actual 线与完成分桶统一本地自然日口径（dayKey），凌晨完成任务当天下降 ✅
+5. **默认日期**：任务抽屉（2 处）/快捷记工时/支出登记（2 处）共 5 处换 todayLocal()，凌晨不再默认昨天（由函数单测覆盖，组件无独立用例）✅
+
+### 30.3 修复过程中新发现并修复的缺陷
+
+1. **beijingDate 未补零**：每月 1~9 日输出 `2026-11-5` 坏数据（跨月用例首轮即红）→ padStart 修复
+2. **repo 层兜底遗漏**：`opLogRepo.create` 的 `logDate` 兜底仍为 UTC 截取（routes 层已改、repo 层漏改）→ 改 beijingDate(now)
+3. **燃尽图口径混用**：`burndown` 内 dates 轴/completedByDate 分桶为本地自然日、actual 线取 key 却用 toISOString 截 UTC 日——北京 0~8 点完成的任务查不到对应桶，actual 线晚一天下降 → 统一 dayKey
+
+### 30.4 自动化基线
+
+| 检查项 | 结果 |
+|--------|------|
+| `npx tsc --noEmit` | 0 错误 ✅ |
+| `npx vitest run` | **487/487**（51 文件，较 v1.12.0 净增 24 项）✅ |
+| 新增/更新套件 | beijing-date（新 7）· date（+9：fmtDateTimeSec/todayLocal/mondayOf）· audit（+4 日期筛选）· oplog-hours-sync（+2 兜底分支）· oplog-export-order.e2e（+1 登记日期值断言）· stats-workload（+1 凌晨窗口）· stats-trend（+1 凌晨完成下降）✅ |
 
 **可发布状态**: 🟢 就绪

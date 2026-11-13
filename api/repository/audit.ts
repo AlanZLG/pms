@@ -82,6 +82,19 @@ export function mapRequestToAudit(method: string, pathname: string): { module: s
   return { module, action, targetId }
 }
 
+// 北京日期（YYYY-MM-DD）→ 该日北京 0 点对应的 UTC ISO。created_at 统一存 UTC ISO 串（record），
+// 换算成 UTC 边界后可直接字符串比较，created_at 保持裸列可继续走 idx_audit_created 索引。
+// 不能拿日期串直接比：created_at >= '2026-11-12' 会漏掉东八区 0-8 点的记录，
+// created_at <= '2026-11-12'（字符串前缀比较）会把当天 08:00 之后的记录全部排除
+function beijingDayStartUtc(day: string): string {
+  return new Date(`${day}T00:00:00+08:00`).toISOString()
+}
+
+function beijingNextDayStartUtc(day: string): string {
+  // 东八区无夏令时，北京 0 点 + 24h 即次日 0 点
+  return new Date(new Date(`${day}T00:00:00+08:00`).getTime() + 86400000).toISOString()
+}
+
 export const auditRepo = {
   record(e: {
     userId?: string | null
@@ -110,8 +123,9 @@ export const auditRepo = {
     if (filter.userId) { where.push('user_id = ?'); params.push(filter.userId) }
     if (filter.module) { where.push('module = ?'); params.push(filter.module) }
     if (filter.action) { where.push('action = ?'); params.push(filter.action) }
-    if (filter.dateFrom) { where.push('created_at >= ?'); params.push(filter.dateFrom) }
-    if (filter.dateTo) { where.push('created_at <= ?'); params.push(filter.dateTo) }
+    // 筛选值是北京日期，按北京日界换算成 UTC 边界（含头不含尾）
+    if (filter.dateFrom) { where.push('created_at >= ?'); params.push(beijingDayStartUtc(filter.dateFrom)) }
+    if (filter.dateTo) { where.push('created_at < ?'); params.push(beijingNextDayStartUtc(filter.dateTo)) }
     if (filter.keyword) {
       const kw = `%${filter.keyword}%`
       where.push('(user_name LIKE ? OR path LIKE ? OR module LIKE ? OR action LIKE ? OR target_id LIKE ?)')

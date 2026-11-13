@@ -113,3 +113,39 @@ describe('操作审计：落库与查询', () => {
     expect(rows[0].ip).toBe('10.0.0.8')
   })
 })
+
+// 日期筛选按北京日界回归：created_at 存 UTC ISO，筛选值是北京日期，
+// 必须换算成 UTC 边界再比较（东八区 0-8 点的记录归入北京当天而非 UTC 前一天）
+describe('操作审计：日期筛选按北京日界', () => {
+  beforeEach(() => {
+    db.exec('DELETE FROM audit_logs')
+    // 直插固定 created_at 的审计行：
+    // b = 北京 11-11 23:59:59；d = 北京 11-12 18:00；c = 北京 11-13 00:00；a = 北京 11-13 01:30
+    const ins = db.prepare(
+      'INSERT INTO audit_logs (id, user_name, method, path, module, action, status_code, created_at) VALUES (?,?,?,?,?,?,?,?)',
+    )
+    ins.run('aud-b', 'x', 'POST', '/api/p', 'task', 'create', 201, '2026-11-11T15:59:59.999Z')
+    ins.run('aud-d', 'x', 'POST', '/api/p', 'task', 'create', 201, '2026-11-12T10:00:00.000Z')
+    ins.run('aud-c', 'x', 'POST', '/api/p', 'task', 'create', 201, '2026-11-12T16:00:00.000Z')
+    ins.run('aud-a', 'x', 'POST', '/api/p', 'task', 'create', 201, '2026-11-12T17:30:00.000Z')
+  })
+
+  const idsOf = (filter: Parameters<typeof auditRepo.query>[0]) =>
+    auditRepo.query(filter).rows.map((r) => r.id).sort()
+
+  it('单日筛选（11-12）→ 只含北京当天记录（修复前字符串比较为 0 条）', () => {
+    expect(idsOf({ dateFrom: '2026-11-12', dateTo: '2026-11-12' })).toEqual(['aud-d'])
+  })
+
+  it('单日筛选（11-13）→ 凌晨 0-8 点的记录（UTC 日期是 11-12）也归入当天', () => {
+    expect(idsOf({ dateFrom: '2026-11-13', dateTo: '2026-11-13' })).toEqual(['aud-a', 'aud-c'])
+  })
+
+  it('仅 dateFrom（11-11 起）→ 含边界日全部 4 条', () => {
+    expect(idsOf({ dateFrom: '2026-11-11' })).toEqual(['aud-a', 'aud-b', 'aud-c', 'aud-d'])
+  })
+
+  it('仅 dateTo（至 11-11）→ 含 11-11 全天（北京 23:59:59 在内）', () => {
+    expect(idsOf({ dateTo: '2026-11-11' })).toEqual(['aud-b'])
+  })
+})

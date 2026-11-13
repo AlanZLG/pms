@@ -29,6 +29,7 @@ import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
 import { Button, Input, Textarea, EmptyState } from '@/components/ui'
 import { cn } from '@/lib/utils'
+import { fmtDate, todayLocal } from '@/lib/date'
 import { toggleExpanded, cellToggleHint } from '@/lib/problemExpand'
 import { useAppStore } from '@/stores/app'
 import AiChatDrawer from '@/components/AiChatDrawer'
@@ -163,7 +164,7 @@ const emptyForm = (): FormState => ({
   proposer: '',
   system: '',
   department: '',
-  logDate: new Date().toISOString().slice(0, 10),
+  logDate: todayLocal(),
   recorder: '',
   problem: '',
   completionDate: '',
@@ -585,7 +586,7 @@ export default function OpLogsPanel({ projectId, highlightLogId, onHighlightDone
       case 'createdAt':
         return (
           <td key={key} className="whitespace-nowrap px-3 py-3 text-text-secondary" title={log.createdAt ? new Date(log.createdAt).toLocaleString('zh-CN') : ''}>
-            {log.createdAt ? log.createdAt.slice(0, 10) : '-'}
+            {log.createdAt ? fmtDate(log.createdAt, 'yyyy-MM-dd') : '-'}
           </td>
         )
       default:
@@ -901,7 +902,7 @@ export default function OpLogsPanel({ projectId, highlightLogId, onHighlightDone
       proposer: form.proposer.trim(),
       system: form.system.trim(),
       department: form.department.trim(),
-      logDate: form.logDate || new Date().toISOString().slice(0, 10),
+      logDate: form.logDate || todayLocal(),
       recorder: form.recorder.trim(),
       problem: form.problem.trim(),
       completionDate: form.completionDate || null,

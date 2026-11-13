@@ -2,7 +2,7 @@ import { Router, type Response, type NextFunction } from 'express'
 import { z } from 'zod'
 import { hoursRepo, taskRepo, userRepo, taskPlannedSummary, DEFAULT_RATE_OWNER, DEFAULT_RATE_MEMBER, DEFAULT_RATE_OUTSOURCED } from '../repository/repo.ts'
 import { authRequired, financeRequired, type AuthRequest } from '../lib/auth.ts'
-import { ApiError } from '../lib/utils.ts'
+import { ApiError, beijingDaysAgo } from '../lib/utils.ts'
 import db, { type SqlRow, type SqlParam } from '../db.ts'
 import { resolveScope } from './stats.ts'
 
@@ -153,7 +153,8 @@ router.get('/me/timesheet', (req: AuthRequest, res: Response, next: NextFunction
     const scopeParams = scope ? [...scope] : []
     const q = String(req.query.q || '').trim()
 
-    const since90 = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10)
+    // 与 th.date（北京日期列）比较的窗口下界，须按北京日历算（凌晨 0-8 点 UTC 切片会少算一天）
+    const since90 = beijingDaysAgo(90)
     let rows: SqlRow[]
     if (q.length >= 2) {
       // 搜索我负责的任务（含历史已完成），用于添加行

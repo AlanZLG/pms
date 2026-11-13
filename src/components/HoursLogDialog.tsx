@@ -9,6 +9,7 @@ import { CalendarDays, Clock, Zap } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
 import { getErrorMessage } from '@/lib/errors'
+import { todayLocal } from '@/lib/date'
 import { Button, Input } from '@/components/ui'
 import { useAppStore } from '@/stores/app'
 import WeeklyTimesheet from '@/components/WeeklyTimesheet'
@@ -52,7 +53,7 @@ export default function HoursLogDialog({ open, task, onClose, onSaved }: Props) 
     [open, projectId, projects.data, me],
   )
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayLocal()
   const [taskId, setTaskId] = useState('')
   const [date, setDate] = useState(today)
   const [plannedHours, setPlannedHours] = useState('')

@@ -3,6 +3,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts'
 import { Plus, Edit2, Trash2, X, Check, XCircle } from 'lucide-react'
 import { useAsync } from '@/hooks/useAsync'
 import { api } from '@/lib/api'
+import { todayLocal } from '@/lib/date'
 import { Card, Button, Input } from '@/components/ui'
 import AmountInput from '@/components/AmountInput'
 import { cn } from '@/lib/utils'
@@ -82,7 +83,7 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
     category: 'labor' as BudgetCategory,
     amount: 0,
     description: '',
-    date: new Date().toISOString().slice(0, 10),
+    date: todayLocal(),
   })
 
   const pieData = filteredBudgets.map((b) => ({
@@ -132,7 +133,7 @@ export default function BudgetPanel({ projectId }: BudgetPanelProps) {
       category: 'labor',
       amount: 0,
       description: '',
-      date: new Date().toISOString().slice(0, 10),
+      date: todayLocal(),
     })
     expenses.reload()
   }
